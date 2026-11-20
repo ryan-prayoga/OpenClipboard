@@ -5,6 +5,7 @@
     <key>CFBundleDevelopmentRegion</key><string>id</string>
     <key>CFBundleDisplayName</key><string>OpenClipboard</string>
     <key>CFBundleExecutable</key><string>OpenClipboard</string>
+    <key>CFBundleIconFile</key><string>OpenClipboard.icns</string>
     <key>CFBundleIdentifier</key><string>dev.ryanprayoga.openclipboard</string>
     <key>CFBundleName</key><string>OpenClipboard</string>
     <key>CFBundlePackageType</key><string>APPL</string>

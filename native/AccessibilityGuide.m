@@ -1,34 +1,13 @@
 #import "AccessibilityGuide.h"
 #import "Native.h"
+#import "OpenClipboardPermissions-Swift.h"
 #import <ApplicationServices/ApplicationServices.h>
 #import <QuartzCore/QuartzCore.h>
 
-static NSString *const SettingsBundleID = @"com.apple.systempreferences";
 static NSString *const AccessibilityURL = @"x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
 
 BOOL OCAccessibilityReady(void) {
     return AXIsProcessTrusted();
-}
-
-static NSRect SystemSettingsFrame(void) {
-    pid_t pid = [NSRunningApplication runningApplicationsWithBundleIdentifier:SettingsBundleID].firstObject.processIdentifier;
-    NSScreen *primary = NSScreen.screens.firstObject;
-    if (!pid || !primary) return NSZeroRect;
-
-    // Window Server coordinates provide placement even before the app has Accessibility access.
-    NSArray<NSDictionary *> *windows = CFBridgingRelease(CGWindowListCopyWindowInfo(
-        kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements, kCGNullWindowID));
-    for (NSDictionary *window in windows) {
-        if ([window[(__bridge NSString *)kCGWindowOwnerPID] intValue] != pid ||
-            [window[(__bridge NSString *)kCGWindowLayer] intValue] != 0) continue;
-        NSDictionary *geometry = window[(__bridge NSString *)kCGWindowBounds];
-        CGRect bounds;
-        if (!geometry || !CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)geometry, &bounds) ||
-            CGRectGetWidth(bounds) < 300 || CGRectGetHeight(bounds) < 250) continue;
-        return NSMakeRect(CGRectGetMinX(bounds), NSMaxY(primary.frame) - CGRectGetMaxY(bounds),
-                          CGRectGetWidth(bounds), CGRectGetHeight(bounds));
-    }
-    return NSZeroRect;
 }
 
 static NSPoint GuideOrigin(NSRect room, NSRect settings, NSSize size) {
@@ -58,130 +37,6 @@ static NSImage *GuideSymbol(NSString *name, CGFloat size) {
         [NSImageSymbolConfiguration configurationWithPointSize:size weight:NSFontWeightSemibold]];
 }
 
-@interface OCAppDragIcon : NSView <NSDraggingSource>
-@property(nonatomic, readonly) BOOL canDrag;
-@property(nonatomic, readonly, getter=isInteracting) BOOL interacting;
-- (instancetype)initWithFrame:(NSRect)frame bundleURL:(NSURL *)bundleURL;
-- (void)playHint;
-- (void)stopHint;
-@end
-
-@implementation OCAppDragIcon {
-    NSURL *_bundleURL;
-    NSImage *_dragImage;
-    NSImageView *_artwork;
-    NSEvent *_press;
-    BOOL _dragging;
-}
-
-- (instancetype)initWithFrame:(NSRect)frame bundleURL:(NSURL *)bundleURL {
-    if (!(self = [super initWithFrame:frame])) return nil;
-    _bundleURL = bundleURL;
-    _dragImage = bundleURL ? [NSWorkspace.sharedWorkspace iconForFile:bundleURL.path] : NSApp.applicationIconImage;
-
-    NSDictionary *info = NSBundle.mainBundle.infoDictionary;
-    BOOL hasBundleIcon = info[@"CFBundleIconFile"] != nil || info[@"CFBundleIconName"] != nil;
-    _artwork = [NSImageView imageViewWithImage:hasBundleIcon ? _dragImage : GuideSymbol(@"clipboard.fill", 28)];
-    _artwork.frame = NSInsetRect(self.bounds, 10, 10);
-    _artwork.contentTintColor = NSColor.controlAccentColor;
-    _artwork.wantsLayer = YES;
-    [_artwork setAccessibilityElement:NO];
-    [self addSubview:_artwork];
-
-    if (bundleURL) {
-        NSImageView *arrow = [NSImageView imageViewWithImage:GuideSymbol(@"arrow.up.right.circle.fill", 17)];
-        arrow.frame = NSMakeRect(NSWidth(frame) - 21, 4, 17, 17);
-        arrow.contentTintColor = NSColor.controlAccentColor;
-        [arrow setAccessibilityElement:NO];
-        [self addSubview:arrow];
-        self.toolTip = @"Seret OpenClipboard.app ke daftar izin";
-    }
-    [self setAccessibilityElement:YES];
-    [self setAccessibilityRole:NSAccessibilityImageRole];
-    [self setAccessibilityLabel:@"Ikon OpenClipboard"];
-    [self setAccessibilityHelp:self.toolTip];
-    return self;
-}
-
-- (void)drawRect:(NSRect)dirtyRect {
-    NSRect bounds = NSInsetRect(self.bounds, 0.5, 0.5);
-    NSBezierPath *tile = [NSBezierPath bezierPathWithRoundedRect:bounds xRadius:17 yRadius:17];
-    [[NSColor.controlAccentColor colorWithAlphaComponent:0.09] setFill];
-    [tile fill];
-    [[NSColor.controlAccentColor colorWithAlphaComponent:0.21] setStroke];
-    [tile stroke];
-}
-
-- (BOOL)canDrag { return _bundleURL != nil; }
-- (BOOL)isInteracting { return _press != nil || _dragging; }
-- (NSView *)hitTest:(NSPoint)point { return [super hitTest:point] ? self : nil; }
-- (BOOL)acceptsFirstMouse:(NSEvent *)event { return _bundleURL != nil; }
-- (BOOL)shouldDelayWindowOrderingForEvent:(NSEvent *)event { return _bundleURL != nil; }
-- (BOOL)mouseDownCanMoveWindow { return _bundleURL == nil; }
-
-- (void)resetCursorRects {
-    if (_bundleURL) [self addCursorRect:self.bounds cursor:NSCursor.openHandCursor];
-}
-
-- (void)mouseDown:(NSEvent *)event {
-    if (!_bundleURL) return;
-    [NSApp preventWindowOrdering];
-    [self stopHint];
-    _press = event;
-}
-
-- (void)mouseUp:(NSEvent *)event {
-    _press = nil;
-}
-
-- (void)mouseDragged:(NSEvent *)event {
-    if (!_press) return;
-    NSPoint press = _press.locationInWindow;
-    NSPoint point = event.locationInWindow;
-    if (hypot(point.x - press.x, point.y - press.y) < 4) return;
-
-    // NSURL writes public.file-url to the drag pasteboard, including paths with spaces.
-    NSDraggingItem *item = [[NSDraggingItem alloc] initWithPasteboardWriter:_bundleURL];
-    NSPoint origin = [self convertPoint:point fromView:nil];
-    [item setDraggingFrame:NSMakeRect(origin.x - 22, origin.y - 22, 44, 44) contents:_dragImage];
-    _press = nil;
-    _dragging = YES;
-    [self beginDraggingSessionWithItems:@[item] event:event source:self];
-}
-
-- (NSDragOperation)draggingSession:(NSDraggingSession *)session
-    sourceOperationMaskForDraggingContext:(NSDraggingContext)context {
-    return context == NSDraggingContextOutsideApplication ? NSDragOperationCopy : NSDragOperationNone;
-}
-
-- (void)draggingSession:(NSDraggingSession *)session willBeginAtPoint:(NSPoint)point {
-    // Let Settings receive the drop even if the guide overlaps part of the list.
-    self.window.ignoresMouseEvents = YES;
-}
-
-- (void)draggingSession:(NSDraggingSession *)session endedAtPoint:(NSPoint)point operation:(NSDragOperation)operation {
-    self.window.ignoresMouseEvents = NO;
-    _dragging = NO;
-}
-
-- (void)playHint {
-    if (!_bundleURL || self.isInteracting || NSWorkspace.sharedWorkspace.accessibilityDisplayShouldReduceMotion) return;
-
-    CABasicAnimation *pulse = [CABasicAnimation animationWithKeyPath:@"transform.scale"];
-    pulse.fromValue = @1;
-    pulse.toValue = @1.08;
-    pulse.duration = 0.45;
-    pulse.autoreverses = YES;
-    pulse.repeatCount = 2;
-    pulse.timingFunction = [CAMediaTimingFunction functionWithControlPoints:0.77 :0 :0.175 :1];
-    [_artwork.layer addAnimation:pulse forKey:@"dragHint"];
-}
-
-- (void)stopHint {
-    [_artwork.layer removeAnimationForKey:@"dragHint"];
-}
-@end
-
 @interface OCAccessibilityPanel : NSPanel
 @end
 
@@ -198,12 +53,12 @@ static NSImage *GuideSymbol(NSString *name, CGFloat size) {
 @property(nonatomic, strong) NSTextField *instructions;
 @property(nonatomic, strong) NSTimer *permissionTimer;
 @property(nonatomic, strong) NSTimer *dismissTimer;
-@property(nonatomic) NSUInteger placementAttempts;
+@property(nonatomic) NSRect settingsFrame;
 @end
 
 @implementation OCAccessibilityGuide
 - (void)buildPanel {
-    NSRect bounds = NSMakeRect(0, 0, 356, 146);
+    NSRect bounds = NSMakeRect(0, 0, 362, 198);
     self.panel = [[OCAccessibilityPanel alloc] initWithContentRect:bounds
         styleMask:NSWindowStyleMaskBorderless | NSWindowStyleMaskNonactivatingPanel
         backing:NSBackingStoreBuffered defer:NO];
@@ -234,34 +89,18 @@ static NSImage *GuideSymbol(NSString *name, CGFloat size) {
     self.prompt = [[NSView alloc] initWithFrame:bounds];
     [glass addSubview:self.prompt];
 
-    NSURL *bundleURL = NSBundle.mainBundle.bundleURL;
-    if (!bundleURL.isFileURL || [bundleURL.pathExtension caseInsensitiveCompare:@"app"] != NSOrderedSame) {
-        bundleURL = nil;
-    }
-    self.dragIcon = [[OCAppDragIcon alloc] initWithFrame:NSMakeRect(19, 43, 66, 66) bundleURL:bundleURL];
-    [self.prompt addSubview:self.dragIcon];
-
-    NSTextField *title = OCLabel(@"Aktifkan Accessibility", 17, NSFontWeightSemibold);
-    title.frame = NSMakeRect(100, 104, 221, 23);
+    NSTextField *title = OCLabel(@"Aktifkan Accessibility", 20, NSFontWeightSemibold);
+    title.frame = NSMakeRect(18, 151, 290, 28);
     [self.prompt addSubview:title];
 
-    self.instructions = [NSTextField wrappingLabelWithString:@""];
-    self.instructions.font = [NSFont systemFontOfSize:13];
-    self.instructions.textColor = NSColor.secondaryLabelColor;
-    self.instructions.frame = NSMakeRect(100, 49, 230, 49);
-    [self.prompt addSubview:self.instructions];
+    NSTextField *purpose = OCLabel(@"Untuk menempelkan klip langsung ke aplikasi lain.", 12, NSFontWeightRegular);
+    purpose.textColor = NSColor.secondaryLabelColor;
+    purpose.frame = NSMakeRect(18, 130, 326, 18);
+    [self.prompt addSubview:purpose];
 
-    NSButton *open = [NSButton buttonWithTitle:@"Buka Pengaturan Sistem" image:GuideSymbol(@"arrow.up.right", 10)
-                                        target:self action:@selector(openSettings:)];
-    open.frame = NSMakeRect(94, 17, 165, 24);
-    open.imagePosition = NSImageTrailing;
-    open.alignment = NSTextAlignmentLeft;
-    open.bezelStyle = NSBezelStyleInline;
-    [self.prompt addSubview:open];
-
-    NSButton *close = [NSButton buttonWithImage:GuideSymbol(@"xmark", 11)
+    NSButton *close = [NSButton buttonWithImage:GuideSymbol(@"xmark.circle.fill", 17)
                                         target:self action:@selector(closeGuide:)];
-    close.frame = NSMakeRect(318, 106, 25, 25);
+    close.frame = NSMakeRect(312, 148, 34, 34);
     close.bordered = NO;
     close.contentTintColor = NSColor.secondaryLabelColor;
     close.keyEquivalent = @"\e";
@@ -269,24 +108,50 @@ static NSImage *GuideSymbol(NSString *name, CGFloat size) {
     [close setAccessibilityLabel:close.toolTip];
     [self.prompt addSubview:close];
 
+    NSURL *bundleURL = NSBundle.mainBundle.bundleURL;
+    if (!bundleURL.isFileURL || [bundleURL.pathExtension caseInsensitiveCompare:@"app"] != NSOrderedSame) {
+        bundleURL = nil;
+    }
+    self.dragIcon = [[OCAppDragIcon alloc] initWithFrame:NSMakeRect(18, 62, 326, 58) bundleURL:bundleURL];
+    [self.prompt addSubview:self.dragIcon];
+
+    self.instructions = [NSTextField wrappingLabelWithString:@""];
+    self.instructions.font = [NSFont systemFontOfSize:11];
+    self.instructions.textColor = NSColor.secondaryLabelColor;
+    self.instructions.frame = NSMakeRect(19, 13, 192, 34);
+    [self updateInstructionsForSettingsLink:YES];
+    [self.prompt addSubview:self.instructions];
+
+    NSButton *open = [NSButton buttonWithTitle:@"Buka Pengaturan" image:GuideSymbol(@"arrow.up.right", 9)
+                                        target:self action:@selector(openSettings:)];
+    open.frame = NSMakeRect(213, 15, 132, 30);
+    open.imagePosition = NSImageTrailing;
+    open.bezelStyle = NSBezelStyleRounded;
+    open.controlSize = NSControlSizeSmall;
+    open.font = [NSFont systemFontOfSize:11 weight:NSFontWeightMedium];
+    [open setAccessibilityLabel:@"Buka Pengaturan Sistem"];
+    [self.prompt addSubview:open];
+
     self.success = [[NSView alloc] initWithFrame:bounds];
     self.success.wantsLayer = YES;
     self.success.hidden = YES;
     [glass addSubview:self.success];
 
-    NSImageView *check = [NSImageView imageViewWithImage:GuideSymbol(@"checkmark.circle.fill", 39)];
-    check.frame = NSMakeRect(29, 51, 47, 47);
+    NSImageView *check = [NSImageView imageViewWithImage:GuideSymbol(@"checkmark.circle.fill", 42)];
+    check.frame = NSMakeRect(158, 102, 46, 46);
     check.contentTintColor = NSColor.systemGreenColor;
     [check setAccessibilityElement:NO];
     [self.success addSubview:check];
 
-    NSTextField *approved = OCLabel(@"Accessibility aktif", 17, NSFontWeightSemibold);
-    approved.frame = NSMakeRect(100, 77, 236, 23);
+    NSTextField *approved = OCLabel(@"Accessibility aktif", 21, NSFontWeightSemibold);
+    approved.frame = NSMakeRect(18, 65, 326, 28);
+    approved.alignment = NSTextAlignmentCenter;
     [self.success addSubview:approved];
 
-    NSTextField *caption = OCLabel(@"OpenClipboard sudah diberi akses.", 13, NSFontWeightRegular);
+    NSTextField *caption = OCLabel(@"Klip bisa langsung ditempel ke aplikasi lain.", 13, NSFontWeightRegular);
     caption.textColor = NSColor.secondaryLabelColor;
-    caption.frame = NSMakeRect(100, 50, 236, 20);
+    caption.frame = NSMakeRect(18, 44, 326, 19);
+    caption.alignment = NSTextAlignmentCenter;
     [self.success addSubview:caption];
 }
 
@@ -316,9 +181,8 @@ static NSImage *GuideSymbol(NSString *name, CGFloat size) {
     self.prompt.hidden = NO;
     self.success.hidden = YES;
     [self openSettings:nil];
-    NSRect settings = SystemSettingsFrame();
-    [self placeOnScreen:screen nearSettings:settings];
-    self.placementAttempts = NSIsEmptyRect(settings) ? 8 : 0;
+    self.settingsFrame = [OCSystemSettingsWindowTracker windowFrame];
+    [self placeOnScreen:screen nearSettings:self.settingsFrame];
     [self.panel orderFrontRegardless];
     [self.dragIcon playHint];
 
@@ -335,12 +199,11 @@ static NSImage *GuideSymbol(NSString *name, CGFloat size) {
         [self showSuccess];
         return;
     }
-    if (!self.placementAttempts || self.dragIcon.isInteracting) return;
-    self.placementAttempts--;
-    NSRect settings = SystemSettingsFrame();
-    if (NSIsEmptyRect(settings)) return;
-    self.placementAttempts = 0;
-    [self placeOnScreen:self.panel.screen nearSettings:settings];
+    if (self.dragIcon.isInteracting) return;
+    NSRect settings = [OCSystemSettingsWindowTracker windowFrame];
+    if (NSEqualRects(settings, self.settingsFrame)) return;
+    self.settingsFrame = settings;
+    if (!NSIsEmptyRect(settings)) [self placeOnScreen:self.panel.screen nearSettings:settings];
 }
 
 - (void)showSuccess {
@@ -377,16 +240,22 @@ static NSImage *GuideSymbol(NSString *name, CGFloat size) {
     [NSRunLoop.mainRunLoop addTimer:self.dismissTimer forMode:NSRunLoopCommonModes];
 }
 
-- (void)openSettings:(id)sender {
-    if ([NSWorkspace.sharedWorkspace openURL:[NSURL URLWithString:AccessibilityURL]]) {
-        self.instructions.stringValue = self.dragIcon.canDrag
-            ? @"Seret ikon ke daftar izin, lalu nyalakan OpenClipboard. Jika perlu, klik tombol +."
-            : @"Klik tombol +, pilih OpenClipboard.app, lalu nyalakan sakelarnya.";
-    } else {
-        [NSWorkspace.sharedWorkspace openURL:[NSURL URLWithString:@"x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension"]];
-        self.instructions.stringValue = @"Pilih Device Control and Data Access di Privasi & Keamanan.";
+- (void)updateInstructionsForSettingsLink:(BOOL)opened {
+    if (!opened) {
+        self.instructions.stringValue = @"Buka Accessibility atau Device\nControl and Data Access.";
+        return;
     }
-    if (sender) self.placementAttempts = 8;
+    self.instructions.stringValue = self.dragIcon.canDrag
+        ? @"Atau tambahkan lewat tombol +.\nLalu nyalakan sakelarnya."
+        : @"Klik +, pilih OpenClipboard.app,\nlalu nyalakan sakelarnya.";
+}
+
+- (void)openSettings:(id)sender {
+    BOOL opened = [NSWorkspace.sharedWorkspace openURL:[NSURL URLWithString:AccessibilityURL]];
+    if (!opened) {
+        [NSWorkspace.sharedWorkspace openURL:[NSURL URLWithString:@"x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension"]];
+    }
+    [self updateInstructionsForSettingsLink:opened];
 }
 
 - (void)closeGuide:(id)sender {
@@ -398,7 +267,6 @@ static NSImage *GuideSymbol(NSString *name, CGFloat size) {
     self.permissionTimer = nil;
     [self.dismissTimer invalidate];
     self.dismissTimer = nil;
-    self.placementAttempts = 0;
     [self.dragIcon stopHint];
 }
 @end

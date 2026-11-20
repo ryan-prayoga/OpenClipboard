@@ -19,8 +19,10 @@ trap cleanup EXIT
 trap 'exit 1' HUP INT TERM
 
 bundle="$stage/OpenClipboard.app"
-mkdir -p "$bundle/Contents/MacOS"
+mkdir -p "$bundle/Contents/MacOS" "$bundle/Contents/Resources"
 cp native/Info.plist "$bundle/Contents/Info.plist"
+cp native/Resources/OpenClipboard.icns "$bundle/Contents/Resources/"
+cp native/AskForPermission/LICENSE "$bundle/Contents/Resources/AskForPermission-LICENSE.txt"
 cp target/aarch64-apple-darwin/release/openclipboard "$bundle/Contents/MacOS/OpenClipboard"
 codesign --force --sign "${OPENCLIPBOARD_SIGNING_IDENTITY:--}" "$bundle"
 codesign --verify --strict "$bundle"
