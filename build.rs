@@ -50,6 +50,7 @@ fn main() {
             "native/Clipboard.m",
             "native/Picker.m",
             "native/Results.m",
+            "native/Tabs.m",
             "native/Toolbar.m",
         ])
         .include(&out_dir)
