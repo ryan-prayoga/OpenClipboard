@@ -50,6 +50,7 @@ BOOL OCPostPaste(pid_t destination, NSInteger version);
 @interface OCPicker : NSObject
 @property(nonatomic, copy) dispatch_block_t openSettings;
 @property(nonatomic, copy) dispatch_block_t openAccessibilityGuide;
+@property(nonatomic, copy) dispatch_block_t quit;
 @property(nonatomic, copy) NSString *recordingStatus;
 @property(nonatomic, copy) NSString *shortcutLabel;
 - (void)showAtBottom:(BOOL)bottom started:(NSTimeInterval)started;

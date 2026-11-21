@@ -38,7 +38,7 @@ void OCConfirmClearHistory(NSWindow *window, BOOL all, dispatch_block_t confirm)
     }];
 }
 
-@interface OCApplication : NSObject <NSApplicationDelegate, NSWindowDelegate>
+@interface OCApplication : NSObject <NSApplicationDelegate, NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate>
 @property(nonatomic, strong) NSWindow *settings;
 @property(nonatomic, strong) NSTabView *settingsPages;
 @property(nonatomic, copy) NSArray<NSButton *> *settingsNavigation;
@@ -61,7 +61,10 @@ void OCConfirmClearHistory(NSWindow *window, BOOL all, dispatch_block_t confirm)
 @property(nonatomic, strong) NSTextField *caretPermission;
 @property(nonatomic, strong) NSButton *guideButton;
 @property(nonatomic, strong) NSButton *detection;
-@property(nonatomic, strong) NSPopUpButton *excluded;
+@property(nonatomic, strong) NSTableView *excludedTable;
+@property(nonatomic, copy) NSArray<NSDictionary *> *excludedRows;
+@property(nonatomic, strong) NSTextField *excludedEmpty;
+@property(nonatomic, strong) NSButton *removeExclusionButton;
 @property(nonatomic, strong) id captureMonitor;
 @property(nonatomic) int64_t shortcutID;
 @property(nonatomic) BOOL launchedAtLogin;
@@ -134,6 +137,20 @@ static NSTextField *PlaceLabel(NSView *view, NSString *title, NSRect rect, BOOL 
 }
 @end
 
+@interface OCSettingsWell : NSView
+@end
+
+@implementation OCSettingsWell
+- (void)drawRect:(NSRect)dirtyRect {
+    NSBezierPath *shape = [NSBezierPath bezierPathWithRoundedRect:NSInsetRect(self.bounds,0.5,0.5) xRadius:8 yRadius:8];
+    [[NSColor.labelColor colorWithAlphaComponent:0.06] setFill];
+    [shape fill];
+    [[NSColor.labelColor colorWithAlphaComponent:0.14] setStroke];
+    shape.lineWidth = 1;
+    [shape stroke];
+}
+@end
+
 static void SettingsGroup(NSView *pane, CGFloat y, CGFloat height) {
     [pane addSubview:[[OCSettingsGroup alloc] initWithFrame:NSMakeRect(0,y,480,height)]];
 }
@@ -171,6 +188,7 @@ static void SettingsTitle(NSView *pane, NSString *title) {
     self.recorder = [OCRecorder new];
     __weak OCApplication *weakSelf = self;
     self.picker.openSettings = ^{ [weakSelf showSettings]; };
+    self.picker.quit = ^{ [weakSelf confirmQuit:nil]; };
     self.picker.openAccessibilityGuide = ^{ [weakSelf requestCaret:nil]; };
     self.picker.didWriteClipboard = ^{ [weakSelf.recorder resetBaseline]; };
     self.recorder.statusChanged = ^{ [weakSelf refreshRecording]; };
@@ -228,6 +246,18 @@ static void SettingsTitle(NSView *pane, NSString *title) {
 }
 
 - (void)openSettingsFromMenu:(id)sender { [self showSettings]; }
+
+// The app has no Dock or menu bar icon, so quitting from a menu removes its only entry point.
+- (void)confirmQuit:(id)sender {
+    NSAlert *alert = [NSAlert new];
+    alert.alertStyle = NSAlertStyleWarning;
+    alert.messageText = @"Keluar dari OpenClipboard?";
+    alert.informativeText = @"Perekaman clipboard dan shortcut berhenti sampai aplikasi dibuka lagi dari Finder atau Spotlight.";
+    NSButton *cancel = [alert addButtonWithTitle:@"Batal"];
+    cancel.keyEquivalent = @"\e";
+    [alert addButtonWithTitle:@"Keluar"].hasDestructiveAction = YES;
+    if ([alert runModal] == NSAlertSecondButtonReturn) [NSApp terminate:nil];
+}
 
 - (void)applicationDidBecomeActive:(NSNotification *)notification {
     [self refreshPermissions];
@@ -324,7 +354,10 @@ static void SettingsTitle(NSView *pane, NSString *title) {
     [self showSettingsSection:self.settingsNavigation[(introduced || self.shortcutID < 0) ? 1 : 0]];
 
     NSImage *power = [NSImage imageWithSystemSymbolName:@"power" accessibilityDescription:nil];
-    NSButton *quit = [OCSettingsNavButton buttonWithTitle:@"Keluar" image:power target:NSApp action:@selector(terminate:)];
+    NSBox *divider = [[NSBox alloc] initWithFrame:NSMakeRect(18,58,143,1)];
+    divider.boxType = NSBoxSeparator;
+    [rail addSubview:divider];
+    NSButton *quit = [OCSettingsNavButton buttonWithTitle:@"Keluar" image:power target:self action:@selector(confirmQuit:)];
     quit.frame = NSMakeRect(12,14,155,36);
     quit.bordered = NO;
     quit.contentTintColor = NSColor.secondaryLabelColor;
@@ -350,8 +383,8 @@ static void SettingsTitle(NSView *pane, NSString *title) {
 
 - (void)buildStart:(NSView *)view {
     SettingsTitle(view, @"Mulai");
-    SettingsGroup(view,146,144);
-    SettingsGroup(view,31,103);
+    SettingsGroup(view,140,150);
+    SettingsGroup(view,31,97);
 
     NSArray *steps = @[
         @[@"Salin seperti biasa", @"Teks, tautan, gambar, dan warna terekam otomatis di Mac ini."],
@@ -359,24 +392,24 @@ static void SettingsTitle(NSView *pane, NSString *title) {
         @[@"Tekan Enter untuk menempel", @"Spasi untuk pratinjau, ⌫ untuk hapus, Esc untuk menutup panel."],
     ];
     for (NSUInteger i = 0; i < steps.count; i++) {
-        CGFloat top = 254 - i*40;
+        CGFloat top = 256 - i*44;
         NSTextField *title = PlaceLabel(view, steps[i][0], NSMakeRect(15,top,450,20), NO);
         title.font = [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold];
         PlaceLabel(view, steps[i][1], NSMakeRect(15,top-19,450,17), YES).font = [NSFont systemFontOfSize:12];
         if (i == 1) self.onboardShortcut = title;
     }
 
-    self.onboardAccessibility = PlaceLabel(view, @"", NSMakeRect(15,108,450,20), NO);
+    self.onboardAccessibility = PlaceLabel(view, @"", NSMakeRect(15,102,450,20), NO);
     self.onboardAccessibility.font = [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold];
     NSTextField *detail = [NSTextField wrappingLabelWithString:
-        @"Opsional. Dengan izin ini, Enter langsung menempel ke aplikasi asal dan daftar muncul dekat kursor teks. "
-        @"Tanpa izin, klip disalin dan Anda tinggal menekan ⌘V."];
+        @"Opsional. Enter langsung menempel ke aplikasi asal, dan daftar muncul dekat kursor teks. "
+        @"Tanpa izin, klip hanya disalin: tekan ⌘V."];
     detail.font = [NSFont systemFontOfSize:12];
     detail.textColor = NSColor.secondaryLabelColor;
-    detail.frame = NSMakeRect(15,70,450,34);
+    detail.frame = NSMakeRect(15,66,450,34);
     [view addSubview:detail];
     self.onboardGuideButton = PlaceButton(view, @"Aktifkan Accessibility…", self,
-        @selector(requestCaret:), NSMakeRect(13,38,200,28));
+        @selector(requestCaret:), NSMakeRect(13,36,200,28));
     [self refreshOnboarding];
 }
 
@@ -461,10 +494,10 @@ static void SettingsTitle(NSView *pane, NSString *title) {
 - (void)buildPrivacy:(NSView *)view {
     SettingsTitle(view, @"Privasi");
     SettingsGroup(view,193,94);
-    SettingsGroup(view,132,45);
-    SettingsGroup(view,19,97);
+    SettingsGroup(view,136,45);
+    SettingsGroup(view,8,116);
 
-    self.clipboardPermission = PlaceLabel(view, @"", NSMakeRect(15,248,267,20), NO);
+    self.clipboardPermission = PlaceLabel(view, @"", NSMakeRect(15,248,225,20), NO);
     self.caretPermission = PlaceLabel(view, @"", NSMakeRect(15,211,215,20), NO);
     PlaceButton(view, @"Buka Privasi & Keamanan", self, @selector(openPrivacy:), NSMakeRect(245,242,217,31));
     self.guideButton = PlaceButton(view, @"Aktifkan Accessibility…", self,
@@ -472,21 +505,47 @@ static void SettingsTitle(NSView *pane, NSString *title) {
     self.guideButton.toolTip = @"Buka panduan untuk posisi dekat kursor teks dan tempel langsung.";
 
     self.detection = [NSButton checkboxWithTitle:@"Deteksi pola sensitif" target:self action:@selector(toggleDetection:)];
-    self.detection.frame = NSMakeRect(15,142,340,25);
+    self.detection.frame = NSMakeRect(15,146,340,25);
     self.detection.state = [NSUserDefaults.standardUserDefaults boolForKey:@"OCDetectSensitive"] ? NSControlStateValueOn : NSControlStateValueOff;
     [view addSubview:self.detection];
 
-    PlaceLabel(view, @"Aplikasi yang dikecualikan", NSMakeRect(15,88,284,19), NO);
-    self.excluded = OCGlassPopup(NSMakeRect(15,51,253,36), view);
-    PlaceButton(view, @"Tambah…", self, @selector(addExclusion:), NSMakeRect(273,53,93,31));
-    PlaceButton(view, @"Hapus", self, @selector(removeExclusion:), NSMakeRect(369,53,94,31));
-    PlaceLabel(view, @"Pengecualian mengikuti perkiraan aplikasi sumber.",
-        NSMakeRect(15,26,447,19), YES);
+    PlaceLabel(view, @"Aplikasi yang dikecualikan", NSMakeRect(15,96,250,19), NO);
+    PlaceButton(view, @"Tambah…", self, @selector(addExclusion:), NSMakeRect(273,91,93,31));
+    self.removeExclusionButton = PlaceButton(view, @"Hapus", self, @selector(removeExclusion:), NSMakeRect(369,91,94,31));
+    self.removeExclusionButton.enabled = NO;
+
+    [view addSubview:[[OCSettingsWell alloc] initWithFrame:NSMakeRect(15,40,447,48)]];
+    NSScrollView *scroll = [[NSScrollView alloc] initWithFrame:NSMakeRect(16,41,445,46)];
+    scroll.hasVerticalScroller = YES;
+    scroll.autohidesScrollers = YES;
+    scroll.borderType = NSNoBorder;
+    scroll.drawsBackground = NO;
+    NSTableView *table = [[NSTableView alloc] initWithFrame:scroll.bounds];
+    NSTableColumn *column = [[NSTableColumn alloc] initWithIdentifier:@"app"];
+    column.editable = NO;
+    column.resizingMask = NSTableColumnAutoresizingMask;
+    [column.dataCell setFont:[NSFont systemFontOfSize:13]];
+    [table addTableColumn:column];
+    table.headerView = nil;
+    table.rowHeight = 22;
+    table.backgroundColor = NSColor.clearColor;
+    table.columnAutoresizingStyle = NSTableViewUniformColumnAutoresizingStyle;
+    table.allowsEmptySelection = YES;
+    table.dataSource = self;
+    table.delegate = self;
+    [table setAccessibilityLabel:@"Aplikasi yang dikecualikan"];
+    scroll.documentView = table;
+    [view addSubview:scroll];
+    self.excludedTable = table;
+
+    self.excludedEmpty = PlaceLabel(view, @"Belum ada pengecualian", NSMakeRect(27,56,423,19), YES);
+    PlaceLabel(view, @"Pengecualian mengikuti perkiraan aplikasi sumber.", NSMakeRect(15,14,447,19), YES);
 }
 
 - (void)refreshRecording {
     self.historyStatus.stringValue = self.recorder.status.length ? self.recorder.status : @"Penyimpanan lokal";
-    self.clipboardPermission.stringValue = [NSString stringWithFormat:@"Izin clipboard  ·  %@", self.recorder.policy ?: @"Ikuti pengaturan sistem"];
+    self.clipboardPermission.stringValue = [NSString stringWithFormat:@"Izin clipboard  ·  %@", self.recorder.policy ?: @"Ikuti sistem"];
+    self.clipboardPermission.toolTip = self.clipboardPermission.stringValue;
     BOOL blocked = [self.recorder.status isEqualToString:@"Akses clipboard dibatasi"];
     self.retryButton.hidden = !blocked;
     self.picker.recordingStatus = self.recorder.status;
@@ -578,7 +637,7 @@ static void SettingsTitle(NSView *pane, NSString *title) {
     self.loginButton.state = (status == SMAppServiceStatusEnabled || status == SMAppServiceStatusRequiresApproval)
         ? NSControlStateValueOn : NSControlStateValueOff;
     self.loginStatus.stringValue = status == SMAppServiceStatusEnabled ? @"Aktif"
-        : status == SMAppServiceStatusRequiresApproval ? @"Perlu persetujuan di Pengaturan Sistem." : @"Nonaktif";
+        : status == SMAppServiceStatusRequiresApproval ? @"Perlu persetujuan sistem." : @"Nonaktif";
 }
 
 - (void)toggleLogin:(NSButton *)sender {
@@ -617,13 +676,28 @@ static void SettingsTitle(NSView *pane, NSString *title) {
 }
 
 - (void)refreshExcluded {
-    [self.excluded removeAllItems];
+    NSMutableArray *rows = [NSMutableArray array];
     for (NSString *app in [NSUserDefaults.standardUserDefaults stringArrayForKey:@"OCExcluded"] ?: @[]) {
         NSURL *location = [NSWorkspace.sharedWorkspace URLForApplicationWithBundleIdentifier:app];
-        [self.excluded addItemWithTitle:location ? location.lastPathComponent.stringByDeletingPathExtension : app];
-        self.excluded.lastItem.representedObject = app;
+        [rows addObject:@{@"name": location ? location.lastPathComponent.stringByDeletingPathExtension : app,
+                          @"bundle": app}];
     }
-    if (!self.excluded.numberOfItems) [self.excluded addItemWithTitle:@"Belum ada pengecualian"];
+    self.excludedRows = rows;
+    [self.excludedTable reloadData];
+    self.excludedEmpty.hidden = rows.count > 0;
+    self.removeExclusionButton.enabled = self.excludedTable.selectedRow >= 0;
+}
+
+- (NSInteger)numberOfRowsInTableView:(NSTableView *)tableView {
+    return (NSInteger)self.excludedRows.count;
+}
+
+- (id)tableView:(NSTableView *)tableView objectValueForTableColumn:(NSTableColumn *)column row:(NSInteger)row {
+    return row >= 0 && (NSUInteger)row < self.excludedRows.count ? self.excludedRows[(NSUInteger)row][@"name"] : nil;
+}
+
+- (void)tableViewSelectionDidChange:(NSNotification *)notification {
+    self.removeExclusionButton.enabled = self.excludedTable.selectedRow >= 0;
 }
 
 - (void)addExclusion:(id)sender {
@@ -647,8 +721,9 @@ static void SettingsTitle(NSView *pane, NSString *title) {
 }
 
 - (void)removeExclusion:(id)sender {
-    NSString *identifier = self.excluded.selectedItem.representedObject;
-    if (!identifier) return;
+    NSInteger row = self.excludedTable.selectedRow;
+    if (row < 0 || (NSUInteger)row >= self.excludedRows.count) return;
+    NSString *identifier = self.excludedRows[(NSUInteger)row][@"bundle"];
     NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
     NSMutableArray *items = [[defaults stringArrayForKey:@"OCExcluded"] mutableCopy];
     [items removeObject:identifier];

@@ -276,8 +276,8 @@ BOOL OCPostPaste(pid_t destination, NSInteger version) {
     switch (behavior) {
         case NSPasteboardAccessBehaviorAlwaysAllow: policy = @"Diizinkan"; break;
         case NSPasteboardAccessBehaviorAlwaysDeny: policy = @"Dibatasi"; break;
-        case NSPasteboardAccessBehaviorAsk: policy = @"Minta persetujuan saat dibaca"; break;
-        default: policy = @"Ikuti pengaturan sistem"; break;
+        case NSPasteboardAccessBehaviorAsk: policy = @"Tanya tiap dibaca"; break;
+        default: policy = @"Ikuti sistem"; break;
     }
     NSString *status = (behavior == NSPasteboardAccessBehaviorAlwaysDeny || self.inaccessible) ? @"Akses clipboard dibatasi"
         : self.limitHit ? @"Penyimpanan penuh" : @"";

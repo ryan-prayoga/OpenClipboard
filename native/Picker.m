@@ -13,6 +13,31 @@ static CGFloat Clamp(CGFloat value, CGFloat low, CGFloat high) {
     return MAX(low, MIN(value, high));
 }
 
+static double DayOf(NSDictionary *row) {
+    NSDate *date = [NSDate dateWithTimeIntervalSince1970:[row[@"last_used"] doubleValue] / 1000.0];
+    return [NSCalendar.currentCalendar startOfDayForDate:date].timeIntervalSince1970;
+}
+
+// Index of the first clip of the next or previous day. Rows are sorted by last use.
+static NSInteger DayGroupIndex(NSArray<NSDictionary *> *rows, NSInteger index, BOOL forward) {
+    NSInteger count = (NSInteger)rows.count;
+    if (!count) return -1;
+    index = Clamp(index, 0, count - 1);
+    double day = DayOf(rows[(NSUInteger)index]);
+    if (forward) {
+        for (NSInteger i = index + 1; i < count; i++) if (DayOf(rows[(NSUInteger)i]) != day) return i;
+        return count - 1;
+    }
+    NSInteger start = index;
+    while (start > 0 && DayOf(rows[(NSUInteger)start - 1]) == day) start--;
+    if (start < index) return start;
+    if (start == 0) return 0;
+    double previous = DayOf(rows[(NSUInteger)start - 1]);
+    NSInteger first = start - 1;
+    while (first > 0 && DayOf(rows[(NSUInteger)first - 1]) == previous) first--;
+    return first;
+}
+
 static NSScreen *ScreenAt(NSPoint point) {
     for (NSScreen *screen in NSScreen.screens) {
         if (NSPointInRect(point, screen.frame)) return screen;
@@ -1205,6 +1230,13 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
         [self refreshSelectionHint:results];
         return event;
     }
+    if (flags == NSEventModifierFlagOption && horizontalArrow && !composing && !preview &&
+        !results.collections && results.rows.count && (resultFocused || emptySearch)) {
+        // ⌥← / ⌥→ jump between days in the card row.
+        if (searchFocused && ![window makeFirstResponder:results]) return event;
+        [self pick:DayGroupIndex(results.rows,results.selected,key == kVK_RightArrow) in:results action:OCResultSelect];
+        return nil;
+    }
     if (flags & (NSEventModifierFlagCommand | NSEventModifierFlagControl | NSEventModifierFlagOption)) return event;
 
     if (!flags && (key == kVK_Delete || key == kVK_ForwardDelete) &&
@@ -1333,13 +1365,15 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
         [menu addItem:[self item:@"Bersihkan riwayat…" action:@selector(clearHistory:) value:nil]];
     }
     [menu addItem:NSMenuItem.separatorItem];
-    NSMenuItem *quit = [[NSMenuItem alloc] initWithTitle:@"Keluar" action:@selector(terminate:) keyEquivalent:@""];
-    quit.target = NSApp;
-    [menu addItem:quit];
+    [menu addItem:[self item:@"Keluar" action:@selector(quitApp:) value:nil]];
     [menu popUpMenuPositioningItem:nil atLocation:NSMakePoint(0,0) inView:sender];
 }
 
 - (void)settings:(id)sender { if (self.openSettings) self.openSettings(); }
+- (void)quitApp:(id)sender {
+    [self dismissRestoringFocus:NO];
+    if (self.quit) self.quit();
+}
 - (void)clearHistory:(id)sender {
     [self clearPreview];
     OCConfirmClearHistory(self.activePanel,NO,^{ [self sendAction:@{@"action":@"clear",@"all":@NO}]; });
