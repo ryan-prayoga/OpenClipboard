@@ -2,13 +2,35 @@
 #import "Bridge.h"
 #import "Toolbar.h"
 
-static const CGFloat PillHeight = 28;
-static const CGFloat RailRowHeight = 30;
+static const CGFloat PillHeight = 32;
+static const CGFloat RailRowHeight = 38;
 static const CGFloat ItemGap = 4;
 static const CGFloat PillPadding = 12;
 static const CGFloat MaxPillWidth = 160;
-static const CGFloat AddWidth = 34;
+static const CGFloat AddWidth = 36;
 static const CGFloat EditWidth = 150;
+
+// Same selected look as a clip row in OCResults: translucent accent fill with an accent outline.
+static void DrawSelection(NSRect rect, CGFloat outlineAlpha) {
+    BOOL dark = [[NSAppearance.currentDrawingAppearance
+        bestMatchFromAppearancesWithNames:@[NSAppearanceNameAqua, NSAppearanceNameDarkAqua]]
+        isEqualToString:NSAppearanceNameDarkAqua];
+    NSColor *accent = NSColor.controlAccentColor;
+    NSBezierPath *shape = [NSBezierPath bezierPathWithRoundedRect:NSInsetRect(rect,0.5,0.5) xRadius:11 yRadius:11];
+    [[accent colorWithAlphaComponent:dark ? 0.24 : 0.16] setFill];
+    [shape fill];
+    [[accent colorWithAlphaComponent:outlineAlpha] setStroke];
+    shape.lineWidth = 1;
+    [shape stroke];
+}
+
+static NSImage *TintedSymbol(NSString *name, CGFloat size, NSColor *color) {
+    NSImage *image = [NSImage imageWithSystemSymbolName:name accessibilityDescription:nil];
+    NSImageSymbolConfiguration *config = [[NSImageSymbolConfiguration configurationWithPointSize:size
+        weight:NSFontWeightSemibold] configurationByApplyingConfiguration:
+        [NSImageSymbolConfiguration configurationWithHierarchicalColor:color]];
+    return [image imageWithSymbolConfiguration:config];
+}
 
 @interface OCTabElement : NSAccessibilityElement
 @property(nonatomic, copy) void (^press)(void);
@@ -101,18 +123,18 @@ static const CGFloat EditWidth = 150;
 
 #pragma mark Layout
 
-- (NSFont *)font { return [NSFont systemFontOfSize:12 weight:NSFontWeightSemibold]; }
+- (NSFont *)font { return [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold]; }
 
 - (CGFloat)pillWidthAtIndex:(NSInteger)index {
     if (index == self.editingIndex) return EditWidth;
     CGFloat text = ceil([[self titleAtIndex:index] sizeWithAttributes:@{NSFontAttributeName:self.font}].width);
-    return MIN(MaxPillWidth, PillPadding*2 + (index == 0 ? 14 : 8) + 6 + text);
+    return MIN(MaxPillWidth, PillPadding*2 + (index == 0 ? 15 : 9) + 7 + text);
 }
 
 // Frame of item `index` in content coordinates (before scrolling). `plusIndex` is "+".
 - (NSRect)contentFrameAtIndex:(NSInteger)index {
     if (self.orientation == OCTabsVertical) {
-        return NSMakeRect(0, index * RailRowHeight, NSWidth(self.bounds), RailRowHeight);
+        return NSMakeRect(0, 5 + index * RailRowHeight, NSWidth(self.bounds), RailRowHeight);
     }
     CGFloat x = 0;
     for (NSInteger i = 0; i < index && i < self.plusIndex; i++) x += [self pillWidthAtIndex:i] + ItemGap;
@@ -176,7 +198,7 @@ static const CGFloat EditWidth = 150;
 }
 
 - (void)drawFocusRingMask {
-    [[NSBezierPath bezierPathWithRoundedRect:[self selectionRect] xRadius:9 yRadius:9] fill];
+    [[NSBezierPath bezierPathWithRoundedRect:[self selectionRect] xRadius:11 yRadius:11] fill];
 }
 - (NSRect)focusRingMaskBounds { return [self selectionRect]; }
 
@@ -187,43 +209,30 @@ static const CGFloat EditWidth = 150;
     NSMutableParagraphStyle *style = [NSMutableParagraphStyle new];
     style.lineBreakMode = NSLineBreakByTruncatingTail;
 
-    if (vertical) {
-        [[NSColor.separatorColor colorWithAlphaComponent:contrast ? 1 : 0.6] setFill];
-        NSRectFill(NSMakeRect(NSWidth(self.bounds)-1, 0, 1, NSHeight(self.bounds)));
-    }
     NSInteger editing = self.editingIndex;
     for (NSInteger i = 0; i < self.tabCount; i++) {
         NSRect frame = [self frameAtIndex:i];
         if (!NSIntersectsRect(frame, dirtyRect) || i == editing) continue;
         BOOL active = i == selected;
         NSRect pill = vertical ? NSInsetRect(frame, 4, 2) : frame;
-        if (active) {
-            NSColor *fill = vertical ? NSColor.controlAccentColor
-                : [NSColor.labelColor colorWithAlphaComponent:contrast ? 0.22 : 0.12];
-            [fill setFill];
-            [[NSBezierPath bezierPathWithRoundedRect:pill xRadius:9 yRadius:9] fill];
-        }
-        NSColor *textColor = active && vertical ? NSColor.alternateSelectedControlTextColor
-            : active ? NSColor.labelColor : NSColor.secondaryLabelColor;
+        if (active) DrawSelection(pill, contrast ? 1 : 0.8);
+        NSColor *textColor = active || contrast ? NSColor.labelColor : NSColor.secondaryLabelColor;
         CGFloat left = NSMinX(pill) + (vertical ? 10 : PillPadding);
         if (i == 0) {
-            NSImage *clock = [NSImage imageWithSystemSymbolName:@"clock" accessibilityDescription:nil];
-            NSImageSymbolConfiguration *config = [NSImageSymbolConfiguration configurationWithPointSize:11
-                weight:NSFontWeightSemibold];
-            NSImage *symbol = [clock imageWithSymbolConfiguration:config];
+            NSImage *symbol = TintedSymbol(@"clock", 12, textColor);
             NSSize size = symbol.size;
             [symbol drawInRect:NSMakeRect(left, NSMidY(pill)-size.height/2, size.width, size.height)
-                fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:active ? 1 : 0.75
+                fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:1
                 respectFlipped:YES hints:nil];
-            left += 14 + 6;
+            left += 15 + 7;
         } else {
             int64_t identifier = [self.collections[(NSUInteger)i-1][@"id"] longLongValue];
             NSColor *dot = [NSColor colorWithHue:oc_tab_hue(identifier) saturation:0.65 brightness:0.9 alpha:1];
             [dot setFill];
-            [[NSBezierPath bezierPathWithOvalInRect:NSMakeRect(left, NSMidY(pill)-4, 8, 8)] fill];
-            left += 8 + 6;
+            [[NSBezierPath bezierPathWithOvalInRect:NSMakeRect(left, NSMidY(pill)-4.5, 9, 9)] fill];
+            left += 9 + 7;
         }
-        NSRect textRect = NSMakeRect(left, NSMidY(pill)-8, MAX(0, NSMaxX(pill) - left - (vertical ? 8 : PillPadding)), 16);
+        NSRect textRect = NSMakeRect(left, NSMidY(pill)-9, MAX(0, NSMaxX(pill) - left - (vertical ? 8 : PillPadding)), 18);
         [[self titleAtIndex:i] drawWithRect:textRect
             options:NSStringDrawingUsesLineFragmentOrigin | NSStringDrawingTruncatesLastVisibleLine
             attributes:@{NSFontAttributeName:self.font, NSForegroundColorAttributeName:textColor,
@@ -232,26 +241,19 @@ static const CGFloat EditWidth = 150;
 
     if (editing >= 0) {
         NSRect frame = [self frameAtIndex:editing];
-        NSRect pill = NSInsetRect(vertical ? NSInsetRect(frame, 4, 2) : frame, 0.75, 0.75);
-        NSBezierPath *shape = [NSBezierPath bezierPathWithRoundedRect:pill xRadius:9 yRadius:9];
-        [[NSColor.labelColor colorWithAlphaComponent:contrast ? 0.22 : 0.12] setFill];
-        [shape fill];
-        [NSColor.controlAccentColor setStroke];
-        shape.lineWidth = 1.5;
-        [shape stroke];
+        NSRect pill = vertical ? NSInsetRect(frame, 4, 2) : frame;
+        DrawSelection(pill, 0.95);
     }
 
     NSRect add = [self frameAtIndex:self.plusIndex];
     if (NSIntersectsRect(add, dirtyRect)) {
-        NSImage *plus = [NSImage imageWithSystemSymbolName:@"plus" accessibilityDescription:nil];
-        NSImage *symbol = [plus imageWithSymbolConfiguration:[NSImageSymbolConfiguration
-            configurationWithPointSize:12 weight:NSFontWeightSemibold]];
+        NSImage *symbol = TintedSymbol(@"plus", 13, NSColor.secondaryLabelColor);
         NSSize size = symbol.size;
         NSRect target = vertical
             ? NSMakeRect(NSMinX(add)+14, NSMidY(add)-size.height/2, size.width, size.height)
             : NSMakeRect(NSMidX(add)-size.width/2, NSMidY(add)-size.height/2, size.width, size.height);
         [symbol drawInRect:target fromRect:NSZeroRect operation:NSCompositingOperationSourceOver
-            fraction:0.8 respectFlipped:YES hints:nil];
+            fraction:1 respectFlipped:YES hints:nil];
     }
 }
 
@@ -320,7 +322,9 @@ static const CGFloat EditWidth = 150;
     [self addSubview:field];
     [self scrollIndexToVisible:self.editingIndex];
     [self.window makeFirstResponder:field];
-    [field selectText:nil];
+    // Not -selectText:, which ends editing and would cancel the field right away.
+    NSText *editor = field.currentEditor;
+    editor.selectedRange = NSMakeRange(0,editor.string.length);
     self.needsDisplay = YES;
 }
 
