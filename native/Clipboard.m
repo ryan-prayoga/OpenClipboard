@@ -8,6 +8,8 @@ static NSString *const OCSource = @"org.nspasteboard.source";
 static NSString *const OCConcealed = @"org.nspasteboard.ConcealedType";
 static NSString *const OCOwnWrite = @"dev.ryanprayoga.openclipboard.restore";
 static const NSUInteger ImageLimit = 25 * 1024 * 1024;
+// Re-checks of an incomplete pasteboard change at the 125 ms poll interval, about 3 seconds.
+static const NSInteger RetryLimit = 24;
 
 static NSPasteboard *OCBoard(void) {
     NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
@@ -211,6 +213,9 @@ BOOL OCPostPaste(pid_t destination, NSInteger version) {
 @property(nonatomic) BOOL switched;
 @property(nonatomic) BOOL limitHit;
 @property(nonatomic) BOOL inaccessible;
+@property(nonatomic) NSInteger retryChange;
+@property(nonatomic) NSInteger retryAttempts;
+@property(nonatomic) BOOL retryChangedApp;
 @property(nonatomic, copy, readwrite) NSString *status;
 @property(nonatomic, copy, readwrite) NSString *policy;
 @end
@@ -242,6 +247,19 @@ BOOL OCPostPaste(pid_t destination, NSInteger version) {
     self.inaccessible = NO;
     [self resetBaseline];
     [self updateStatus];
+}
+
+// Some apps clear the pasteboard first and write large payloads (such as images) or add the
+// supported types afterwards without raising the change count again. Look again for a short
+// while instead of dropping a copy that was only incomplete when first seen.
+- (void)retryIncompleteChange:(NSInteger)current previous:(NSInteger)previous changedApp:(BOOL)changedApp {
+    if (self.retryChange != current) {
+        self.retryChange = current;
+        self.retryAttempts = 0;
+    }
+    if (++self.retryAttempts > RetryLimit) return;
+    self.count = previous;
+    self.retryChangedApp = changedApp;
 }
 
 - (void)storageFull:(BOOL)full {
@@ -281,7 +299,8 @@ BOOL OCPostPaste(pid_t destination, NSInteger version) {
     NSInteger current = board.changeCount;
     NSString *front = NSWorkspace.sharedWorkspace.frontmostApplication.bundleIdentifier;
     NSInteger previous = self.count;
-    BOOL changedApp = self.switched || ![self.front isEqualToString:front];
+    BOOL changedApp = self.switched || ![self.front isEqualToString:front]
+        || (self.retryChange == current && self.retryChangedApp);
     self.count = current;
     self.front = front;
     self.switched = NO;
@@ -295,6 +314,7 @@ BOOL OCPostPaste(pid_t destination, NSInteger version) {
     if (!items.count) {
         self.inaccessible = board.accessBehavior == NSPasteboardAccessBehaviorAlwaysDeny;
         [self updateStatus];
+        if (!self.inaccessible) [self retryIncompleteChange:current previous:previous changedApp:changedApp];
         return;
     }
     for (NSPasteboardItem *item in items) {
@@ -334,7 +354,11 @@ BOOL OCPostPaste(pid_t destination, NSInteger version) {
             }
         }
     }
-    if (!entries.count || board.changeCount != current) return;
+    if (board.changeCount != current) return;
+    if (!entries.count) {
+        [self retryIncompleteChange:current previous:previous changedApp:changedApp];
+        return;
+    }
 
     OCPart *parts = calloc(entries.count, sizeof(OCPart));
     if (!parts) return;
