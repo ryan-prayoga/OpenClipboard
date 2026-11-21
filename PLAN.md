@@ -12,6 +12,7 @@ Target pengujian pertama adalah Mac Apple Silicon dengan macOS 27.2.1. Bundle `.
 
 | Bagian | Kontrol |
 | --- | --- |
+| **Mulai** | Tiga langkah pemakaian dan status tempel otomatis (Accessibility). Tampil pertama kali Pengaturan dibuka. |
 | **Umum** | **Shortcut global**, **Tampilan clipboard**, dan **Jalankan saat login**. |
 | **Riwayat** | Status perekaman, batas klip riwayat biasa, penggunaan penyimpanan, **Bersihkan riwayat…**, dan **Hapus semua klip…**. |
 | **Privasi** | Daftar aplikasi yang dikecualikan, **Deteksi pola sensitif**, serta status dan aksi untuk izin clipboard dan Accessibility. |
@@ -31,7 +32,7 @@ Target pengujian pertama adalah Mac Apple Silicon dengan macOS 27.2.1. Bundle `.
 
 - Perekaman clipboard otomatis selama aplikasi berjalan dan menyimpan riwayat di Mac ini. Klip yang sudah berada di clipboard menjadi titik awal pengamatan dan dilewati saat aplikasi dibuka. Panel dan Pengaturan menampilkan pemberitahuan jika akses clipboard dibatasi atau penyimpanan penuh.
 - Tampilkan izin clipboard dan Accessibility secara terpisah. Untuk clipboard, tampilkan kebijakan yang dilaporkan sistem dan hasil pembacaan terakhir jika tersedia. Bila akses dibatasi, hentikan pembacaan, tampilkan cara membuka Pengaturan Sistem, dan sediakan **Coba lagi** setelah pengguna memperbarui izin.
-- Buka halaman izin Accessibility di Pengaturan Sistem dan tampilkan panduan animasi saat pengguna memilih **Aktifkan Accessibility…** atau pertama kali mencoba menempel langsung tanpa izin. Saat izin terdeteksi, perbarui status di panduan dan di Pengaturan. Jika akses posisi belum tersedia, popup dibuka dekat pointer. Perekaman mengikuti izin clipboard.
+- Buka halaman izin Accessibility di Pengaturan Sistem dan tampilkan panduan animasi hanya saat pengguna memilih **Aktifkan Accessibility…**. Tanpa izin ini, **Enter** tetap menyalin klip ke clipboard dan menampilkan pemberitahuan singkat untuk menekan `⌘V`. Saat izin terdeteksi, perbarui status di panduan dan di Pengaturan. Jika akses posisi belum tersedia, popup dibuka dekat pointer. Perekaman mengikuti izin clipboard.
 
 ### Popup di dekat kursor teks
 

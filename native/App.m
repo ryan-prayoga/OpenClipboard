@@ -65,7 +65,9 @@ void OCConfirmClearHistory(NSWindow *window, BOOL all, dispatch_block_t confirm)
 @property(nonatomic, strong) id captureMonitor;
 @property(nonatomic) int64_t shortcutID;
 @property(nonatomic) BOOL launchedAtLogin;
-@property(nonatomic) BOOL didCheckAccessibilityOnOpen;
+@property(nonatomic, strong) NSTextField *onboardShortcut;
+@property(nonatomic, strong) NSTextField *onboardAccessibility;
+@property(nonatomic, strong) NSButton *onboardGuideButton;
 - (void)receiveEvent:(NSDictionary *)event;
 - (void)showSettings;
 @end
@@ -164,6 +166,7 @@ static void SettingsTitle(NSView *pane, NSString *title) {
     OCSend(@{@"action": @"retention", @"days": @([defaults integerForKey:HistoryRetentionDays])});
     OCSend(@{@"action": @"limit", @"limit": @([defaults integerForKey:HistoryLimit])});
 
+    [self installMainMenu];
     self.picker = [OCPicker new];
     self.recorder = [OCRecorder new];
     __weak OCApplication *weakSelf = self;
@@ -186,12 +189,45 @@ static void SettingsTitle(NSView *pane, NSString *title) {
     return NO;
 }
 
+// Opening the app only shows Settings. The Accessibility guide starts when the user asks for it.
 - (void)openFromLaunch {
     [self showSettings];
-    if (self.didCheckAccessibilityOnOpen) return;
-    self.didCheckAccessibilityOnOpen = YES;
-    if (!OCAccessibilityReady()) [self requestCaret:nil];
 }
+
+- (void)installMainMenu {
+    NSMenu *bar = [NSMenu new];
+    NSMenuItem *appItem = [NSMenuItem new];
+    NSMenu *app = [[NSMenu alloc] initWithTitle:@"OpenClipboard"];
+    NSMenuItem *settings = [app addItemWithTitle:@"Pengaturan…" action:@selector(openSettingsFromMenu:) keyEquivalent:@","];
+    settings.target = self;
+    [app addItem:NSMenuItem.separatorItem];
+    [app addItemWithTitle:@"Keluar dari OpenClipboard" action:@selector(terminate:) keyEquivalent:@"q"];
+    appItem.submenu = app;
+    [bar addItem:appItem];
+
+    NSMenuItem *editItem = [NSMenuItem new];
+    NSMenu *edit = [[NSMenu alloc] initWithTitle:@"Edit"];
+    [edit addItemWithTitle:@"Urungkan" action:NSSelectorFromString(@"undo:") keyEquivalent:@"z"];
+    NSMenuItem *redo = [edit addItemWithTitle:@"Ulangi" action:NSSelectorFromString(@"redo:") keyEquivalent:@"z"];
+    redo.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagShift;
+    [edit addItem:NSMenuItem.separatorItem];
+    [edit addItemWithTitle:@"Potong" action:@selector(cut:) keyEquivalent:@"x"];
+    [edit addItemWithTitle:@"Salin" action:@selector(copy:) keyEquivalent:@"c"];
+    [edit addItemWithTitle:@"Tempel" action:@selector(paste:) keyEquivalent:@"v"];
+    [edit addItemWithTitle:@"Pilih Semua" action:@selector(selectAll:) keyEquivalent:@"a"];
+    editItem.submenu = edit;
+    [bar addItem:editItem];
+
+    NSMenuItem *windowItem = [NSMenuItem new];
+    NSMenu *window = [[NSMenu alloc] initWithTitle:@"Jendela"];
+    [window addItemWithTitle:@"Tutup" action:@selector(performClose:) keyEquivalent:@"w"];
+    windowItem.submenu = window;
+    [bar addItem:windowItem];
+    NSApp.mainMenu = bar;
+    NSApp.windowsMenu = window;
+}
+
+- (void)openSettingsFromMenu:(id)sender { [self showSettings]; }
 
 - (void)applicationDidBecomeActive:(NSNotification *)notification {
     [self refreshPermissions];
@@ -254,17 +290,18 @@ static void SettingsTitle(NSView *pane, NSString *title) {
     self.settingsPages = [[NSTabView alloc] initWithFrame:NSMakeRect(205,22,480,350)];
     self.settingsPages.tabViewType = NSNoTabsNoBorder;
     [root addSubview:self.settingsPages];
-    NSArray *sections = @[@"Umum", @"Riwayat", @"Privasi"];
-    NSArray *icons = @[@"slider.horizontal.3", @"clock.arrow.circlepath", @"lock.shield"];
+    NSArray *sections = @[@"Mulai", @"Umum", @"Riwayat", @"Privasi"];
+    NSArray *icons = @[@"sparkles", @"slider.horizontal.3", @"clock.arrow.circlepath", @"lock.shield"];
     NSMutableArray *navigation = [NSMutableArray array];
     for (NSUInteger i=0; i<sections.count; i++) {
         NSTabViewItem *item = [[NSTabViewItem alloc] initWithIdentifier:sections[i]];
         item.label = sections[i];
         item.view = [[NSView alloc] initWithFrame:NSMakeRect(0,0,480,350)];
         [self.settingsPages addTabViewItem:item];
-        if (i==0) [self buildGeneral:item.view];
-        if (i==1) [self buildHistory:item.view];
-        if (i==2) [self buildPrivacy:item.view];
+        if (i==0) [self buildStart:item.view];
+        if (i==1) [self buildGeneral:item.view];
+        if (i==2) [self buildHistory:item.view];
+        if (i==3) [self buildPrivacy:item.view];
 
         NSImage *image = [NSImage imageWithSystemSymbolName:icons[i] accessibilityDescription:nil];
         NSButton *button = [OCSettingsNavButton buttonWithTitle:sections[i] image:image target:self
@@ -280,7 +317,11 @@ static void SettingsTitle(NSView *pane, NSString *title) {
         [navigation addObject:button];
     }
     self.settingsNavigation = navigation;
-    [self showSettingsSection:self.settingsNavigation.firstObject];
+    // The first visit explains how to use the app. A missing shortcut sends the user straight to Umum.
+    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+    BOOL introduced = [defaults boolForKey:@"OCDidShowStart"];
+    [defaults setBool:YES forKey:@"OCDidShowStart"];
+    [self showSettingsSection:self.settingsNavigation[(introduced || self.shortcutID < 0) ? 1 : 0]];
 
     NSImage *power = [NSImage imageWithSystemSymbolName:@"power" accessibilityDescription:nil];
     NSButton *quit = [OCSettingsNavButton buttonWithTitle:@"Keluar" image:power target:NSApp action:@selector(terminate:)];
@@ -305,6 +346,48 @@ static void SettingsTitle(NSView *pane, NSString *title) {
         button.contentTintColor = selected ? NSColor.controlAccentColor : NSColor.secondaryLabelColor;
         button.needsDisplay = YES;
     }
+}
+
+- (void)buildStart:(NSView *)view {
+    SettingsTitle(view, @"Mulai");
+    SettingsGroup(view,146,144);
+    SettingsGroup(view,31,103);
+
+    NSArray *steps = @[
+        @[@"Salin seperti biasa", @"Teks, tautan, gambar, dan warna terekam otomatis di Mac ini."],
+        @[@"", @"Cari atau pilih klip dengan panah. Ketik langsung untuk mencari."],
+        @[@"Tekan Enter untuk menempel", @"Spasi untuk pratinjau, ⌫ untuk hapus, Esc untuk menutup panel."],
+    ];
+    for (NSUInteger i = 0; i < steps.count; i++) {
+        CGFloat top = 254 - i*40;
+        NSTextField *title = PlaceLabel(view, steps[i][0], NSMakeRect(15,top,450,20), NO);
+        title.font = [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold];
+        PlaceLabel(view, steps[i][1], NSMakeRect(15,top-19,450,17), YES).font = [NSFont systemFontOfSize:12];
+        if (i == 1) self.onboardShortcut = title;
+    }
+
+    self.onboardAccessibility = PlaceLabel(view, @"", NSMakeRect(15,108,450,20), NO);
+    self.onboardAccessibility.font = [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold];
+    NSTextField *detail = [NSTextField wrappingLabelWithString:
+        @"Opsional. Dengan izin ini, Enter langsung menempel ke aplikasi asal dan daftar muncul dekat kursor teks. "
+        @"Tanpa izin, klip disalin dan Anda tinggal menekan ⌘V."];
+    detail.font = [NSFont systemFontOfSize:12];
+    detail.textColor = NSColor.secondaryLabelColor;
+    detail.frame = NSMakeRect(15,70,450,34);
+    [view addSubview:detail];
+    self.onboardGuideButton = PlaceButton(view, @"Aktifkan Accessibility…", self,
+        @selector(requestCaret:), NSMakeRect(13,38,200,28));
+    [self refreshOnboarding];
+}
+
+- (void)refreshOnboarding {
+    BOOL ready = OCAccessibilityReady();
+    self.onboardAccessibility.stringValue = ready ? @"Tempel otomatis  ·  Aktif" : @"Tempel otomatis  ·  Belum aktif";
+    self.onboardGuideButton.hidden = ready;
+    NSString *label = [NSUserDefaults.standardUserDefaults stringForKey:ShortcutLabel] ?: @"⌘⇧V";
+    self.onboardShortcut.stringValue = self.shortcutID >= 0
+        ? [NSString stringWithFormat:@"Tekan %@ dari aplikasi mana pun", label]
+        : @"Shortcut belum aktif. Atur di tab Umum.";
 }
 
 - (void)buildGeneral:(NSView *)view {
@@ -346,7 +429,7 @@ static void SettingsTitle(NSView *pane, NSString *title) {
     self.historyFeedback = PlaceLabel(view, HistoryStorageNote, NSMakeRect(15,218,446,22), YES);
 
     PlaceLabel(view, @"Batas jumlah klip biasa", NSMakeRect(15,159,225,20), NO);
-    self.historyLimit = [NSTextField textFieldWithString:[NSString stringWithFormat:@"%ld",
+    self.historyLimit = [OCEditableTextField textFieldWithString:[NSString stringWithFormat:@"%ld",
         (long)[NSUserDefaults.standardUserDefaults integerForKey:HistoryLimit]]];
     self.historyLimit.frame = NSMakeRect(292,157,77,25);
     self.historyLimit.alignment = NSTextAlignmentCenter;
@@ -410,6 +493,7 @@ static void SettingsTitle(NSView *pane, NSString *title) {
     BOOL ready = OCAccessibilityReady();
     self.caretPermission.stringValue = ready ? @"Accessibility  ·  Diizinkan" : @"Accessibility  ·  Perlu izin";
     self.guideButton.hidden = ready;
+    [self refreshOnboarding];
     [self refreshRecording];
 }
 
@@ -417,6 +501,7 @@ static void SettingsTitle(NSView *pane, NSString *title) {
     NSString *label = [NSUserDefaults.standardUserDefaults stringForKey:ShortcutLabel] ?: @"⌘⇧V";
     self.shortcutValue.stringValue = label;
     self.picker.shortcutLabel = self.shortcutID >= 0 ? label : nil;
+    [self refreshOnboarding];
 }
 
 - (void)finishCapture {

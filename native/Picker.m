@@ -27,6 +27,10 @@ static NSScreen *ScreenAt(NSPoint point) {
 @implementation OCPanel
 - (BOOL)canBecomeKeyWindow { return YES; }
 - (BOOL)canBecomeMainWindow { return NO; }
+- (BOOL)performKeyEquivalent:(NSEvent *)event {
+    if ([super performKeyEquivalent:event]) return YES;
+    return OCPerformEditShortcut(event, self.firstResponder);
+}
 @end
 
 @interface OCHorizontalScrollView : NSScrollView
@@ -193,7 +197,11 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
 @property(nonatomic) uint64_t panelToken;
 @property(nonatomic) int64_t revealed;
 @property(nonatomic) OCPayloadMode payloadMode;
-@property(nonatomic) BOOL didOfferAccessibilityGuide;
+@property(nonatomic, strong) NSPanel *toast;
+@property(nonatomic) uint64_t toastTicket;
+@property(nonatomic) uint64_t messageTicket;
+@property(nonatomic) BOOL statusWarning;
+@property(nonatomic) CGFloat statusWidth;
 @end
 
 @implementation OCPicker
@@ -292,6 +300,8 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
     self.status = OCLabel(self.recordingStatus ?: @"", 11, NSFontWeightMedium);
     self.status.textColor = NSColor.secondaryLabelColor;
     self.status.frame = NSMakeRect(edge+2,footerY,w-2*edge-hintsWidth-8,16);
+    self.statusWidth = NSWidth(self.status.frame);
+    self.statusWarning = NO;
     [view addSubview:self.status];
 
     self.shortcutHints = nil;
@@ -488,7 +498,7 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
         @"query":self.activeSearch.stringValue ?: @"", @"kind":@"", @"collection":@(self.collection)})) {
         self.catalogTicket = ticket;
     } else {
-        [self setMessage:@"Riwayat sedang sibuk. Coba lagi."];
+        [self setWarning:@"Riwayat sedang sibuk. Coba lagi."];
     }
 }
 
@@ -529,7 +539,7 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
         if ([event[@"ticket"] unsignedLongLongValue] != self.undoTicket) return;
         self.undoPending = NO;
         [self refreshUndoControls];
-        [self setMessage:[event[@"reason"] isEqualToString:@"undo_full"]
+        [self setWarning:[event[@"reason"] isEqualToString:@"undo_full"]
             ? @"Batas riwayat tercapai." : @"Klip belum dipulihkan."];
         return;
     }
@@ -546,7 +556,7 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
             @"missing":@"Klip ini sudah tidak tersedia.", @"collection_name":@"Nama koleksi kosong, terlalu panjang, atau sudah dipakai.",
             @"collection_missing":@"Koleksi sudah tidak tersedia.",
             @"not_manually_sensitive":@"Klip ini ditandai oleh deteksi otomatis."}[reason];
-        [self setMessage:description ?: @"Tindakan gagal. Coba lagi."];
+        [self setWarning:description ?: @"Tindakan gagal. Coba lagi."];
     } else if ([kind isEqualToString:@"catalog"] && [event[@"ticket"] unsignedLongLongValue] == self.catalogTicket) {
         NSDictionary *catalog = event[@"catalog"];
         NSArray *nextCollections = catalog[@"collections"] ?: @[];
@@ -816,22 +826,79 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
         button.hidden = !available;
         button.enabled = !self.undoPending;
     }
-    self.shortcutHints.hidden = available;
+    self.shortcutHints.hidden = available || self.statusWarning;
 }
 
 - (void)undoDelete:(id)sender {
     if (!self.undoTicket || self.undoPending) return;
     self.undoPending = OCSend(@{@"action":@"undo_delete",@"ticket":@(self.undoTicket)});
-    if (!self.undoPending) [self setMessage:@"Riwayat sedang sibuk. Coba lagi."];
+    if (!self.undoPending) [self setWarning:@"Riwayat sedang sibuk. Coba lagi."];
     [self refreshUndoControls];
 }
 
+// Neutral status. A non-empty recording status (blocked clipboard, full storage) is a
+// standing problem, so it keeps the warning style until it clears.
 - (void)setMessage:(NSString *)message {
-    (self.side ? self.sideStatus : self.status).stringValue = message.length ? message : self.undoMessage ?: @"";
+    BOOL standing = message.length && [message isEqualToString:self.recordingStatus];
+    if (!standing) self.messageTicket++;
+    [self presentStatus:message warning:standing announce:NO];
+}
+
+// Failed action. Shown with a warning icon, announced to VoiceOver, and cleared after a while.
+- (void)setWarning:(NSString *)message {
+    uint64_t ticket = ++self.messageTicket;
+    [self presentStatus:message warning:YES announce:YES];
+    __weak OCPicker *weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 6 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+        OCPicker *picker = weakSelf;
+        if (picker && picker.panel && picker.messageTicket == ticket) [picker setMessage:picker.recordingStatus];
+    });
+}
+
+- (void)presentStatus:(NSString *)message warning:(BOOL)warning announce:(BOOL)announce {
+    NSTextField *label = self.side ? self.sideStatus : self.status;
+    if (!label) return;
+    NSString *text = message.length ? message : self.undoMessage ?: @"";
+    warning = warning && text.length;
+    if (warning) {
+        NSTextAttachment *attachment = [NSTextAttachment new];
+        NSImage *symbol = [NSImage imageWithSystemSymbolName:@"exclamationmark.triangle.fill" accessibilityDescription:nil];
+        attachment.image = [symbol imageWithSymbolConfiguration:
+            [NSImageSymbolConfiguration configurationWithPaletteColors:@[NSColor.systemOrangeColor]]];
+        attachment.bounds = NSMakeRect(0,-2,13,12);
+        NSMutableAttributedString *content = [[NSMutableAttributedString alloc]
+            initWithAttributedString:[NSAttributedString attributedStringWithAttachment:attachment]];
+        NSMutableParagraphStyle *style = [NSMutableParagraphStyle new];
+        style.lineBreakMode = NSLineBreakByTruncatingTail;
+        [content appendAttributedString:[[NSAttributedString alloc] initWithString:[@"  " stringByAppendingString:text]
+            attributes:@{NSFontAttributeName:[NSFont systemFontOfSize:12 weight:NSFontWeightMedium],
+                NSForegroundColorAttributeName:NSColor.labelColor, NSParagraphStyleAttributeName:style}]];
+        label.attributedStringValue = content;
+    } else {
+        label.font = [NSFont systemFontOfSize:11 weight:NSFontWeightMedium];
+        label.textColor = NSColor.secondaryLabelColor;
+        label.stringValue = text;
+    }
+    label.accessibilityLabel = warning ? [@"Peringatan: " stringByAppendingString:text] : nil;
+    if (announce && warning) {
+        NSAccessibilityPostNotificationWithUserInfo(label,NSAccessibilityAnnouncementRequestedNotification,
+            @{NSAccessibilityAnnouncementKey:text,NSAccessibilityPriorityKey:@(NSAccessibilityPriorityHigh)});
+    }
+    if (label == self.status) {
+        // A warning needs the room the shortcut hints normally take.
+        self.statusWarning = warning;
+        CGFloat edge = NSMinX(label.frame) - 2;
+        CGFloat undoRoom = self.undoButton.hidden ? 0 : 96;
+        NSRect frame = label.frame;
+        frame.size.width = warning && self.shortcutHints
+            ? NSWidth(label.superview.bounds) - 2*edge - 2 - undoRoom : self.statusWidth;
+        label.frame = frame;
+        self.shortcutHints.hidden = warning || self.undoTicket != 0;
+    }
 }
 
 - (void)sendAction:(NSDictionary *)request {
-    if (!OCSend(request)) [self setMessage:@"Riwayat sedang sibuk. Coba lagi."];
+    if (!OCSend(request)) [self setWarning:@"Riwayat sedang sibuk. Coba lagi."];
 }
 
 - (void)loadVisibleImages {
@@ -875,26 +942,17 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
     int64_t identifier = [row[@"id"] longLongValue];
     if (mode == OCPaste) {
         if ([row[@"sensitive"] boolValue] && self.revealed != identifier) {
-            [self setMessage:@"Tekan Spasi untuk membuka item sensitif."];
+            [self setWarning:@"Tekan Spasi untuk membuka item sensitif."];
             return;
         }
-        if (![self canPasteToOrigin]) return;
-        if (!CGPreflightPostEventAccess()) {
-            BOOL hasAccessibility = OCAccessibilityReady();
-            [self setMessage:hasAccessibility ? @"macOS belum mengizinkan tempel langsung."
-                                               : @"Buka panduan Accessibility dari menu ⋯."];
-            if (!hasAccessibility && !self.didOfferAccessibilityGuide && self.openAccessibilityGuide) {
-                self.didOfferAccessibilityGuide = YES;
-                self.openAccessibilityGuide();
-            }
-            return;
-        }
+        // Without permission to post key events the clip is only copied, so any origin works.
+        if (CGPreflightPostEventAccess() && ![self canPasteToOrigin]) return;
     }
     self.payloadMode = mode;
     uint64_t ticket = ++self.payloadTicket;
     if (!OCSend(@{@"action":@"payload",@"id":@(identifier),@"ticket":@(ticket)})) {
         self.payloadMode = OCIdle;
-        [self setMessage:@"Riwayat sedang sibuk. Coba lagi."];
+        [self setWarning:@"Riwayat sedang sibuk. Coba lagi."];
     }
 }
 
@@ -906,20 +964,23 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
     self.payloadMode = OCIdle;
     if (mode == OCPaste) {
         if (sensitive && self.revealed != clip) return;
-        if (![self canPasteToOrigin]) return;
-        if (!CGPreflightPostEventAccess()) {
-            [self setMessage:OCAccessibilityReady() ? @"macOS belum mengizinkan tempel langsung."
-                                                  : @"Buka panduan Accessibility dari menu ⋯."];
-            return;
-        }
+        BOOL direct = CGPreflightPostEventAccess();
+        if (direct && ![self canPasteToOrigin]) return;
         NSInteger version;
         if (!OCWriteClipboard(parts,sensitive,&version)) {
-            [self setMessage:@"Klip gagal disiapkan untuk ditempel."];
+            [self setWarning:@"Klip gagal disiapkan untuk ditempel."];
             return;
         }
         NSRunningApplication *destination = self.origin;
+        NSScreen *screen = self.activePanel.screen;
         if (self.didWriteClipboard) self.didWriteClipboard();
         [self dismissRestoringFocus:YES];
+        if (!direct) {
+            // No permission to send ⌘V: the clip is on the clipboard, so tell the user to paste it.
+            [self showToast:OCAccessibilityReady() ? @"Disalin. Tekan ⌘V untuk menempel."
+                : @"Disalin. Tekan ⌘V. Aktifkan Accessibility untuk tempel otomatis." onScreen:screen];
+            return;
+        }
         uint64_t token = self.panelToken;
         // Let the original window regain the key focus before dispatching the paste.
         dispatch_async(dispatch_get_main_queue(), ^{
@@ -930,16 +991,63 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
     [self showPreview:parts sensitive:sensitive id:clip];
 }
 
+- (void)showToast:(NSString *)text onScreen:(NSScreen *)preferred {
+    [self.toast orderOut:nil];
+    NSScreen *screen = preferred ?: NSScreen.mainScreen ?: NSScreen.screens.firstObject;
+    NSRect room = NSInsetRect(screen.visibleFrame,20,20);
+    NSTextField *label = OCLabel(text,13,NSFontWeightMedium);
+    label.textColor = NSColor.labelColor;
+    CGFloat width = MIN(NSWidth(room),ceil([label.attributedStringValue size].width)+48), height = 38;
+    NSRect frame = NSMakeRect(NSMidX(room)-width/2,NSMinY(room)+24,width,height);
+    NSPanel *toast = [[NSPanel alloc] initWithContentRect:frame
+        styleMask:NSWindowStyleMaskBorderless | NSWindowStyleMaskNonactivatingPanel
+        backing:NSBackingStoreBuffered defer:NO];
+    toast.title = @"Pemberitahuan OpenClipboard";
+    toast.releasedWhenClosed = NO;
+    toast.hidesOnDeactivate = NO;
+    toast.floatingPanel = YES;
+    toast.level = NSFloatingWindowLevel;
+    toast.opaque = NO;
+    toast.backgroundColor = NSColor.clearColor;
+    toast.hasShadow = YES;
+    toast.ignoresMouseEvents = YES;
+    toast.collectionBehavior = NSWindowCollectionBehaviorMoveToActiveSpace |
+        NSWindowCollectionBehaviorFullScreenAuxiliary | NSWindowCollectionBehaviorTransient;
+    NSVisualEffectView *background = [[NSVisualEffectView alloc] initWithFrame:NSMakeRect(0,0,width,height)];
+    background.material = NSVisualEffectMaterialPopover;
+    background.blendingMode = NSVisualEffectBlendingModeBehindWindow;
+    background.state = NSVisualEffectStateActive;
+    background.maskImage = GlassMask(background.bounds.size,height/2);
+    label.alignment = NSTextAlignmentCenter;
+    label.frame = NSMakeRect(18,(height-18)/2,width-36,18);
+    [background addSubview:label];
+    toast.contentView = background;
+    self.toast = toast;
+    [toast orderFrontRegardless];
+    NSAccessibilityPostNotificationWithUserInfo(NSApp,NSAccessibilityAnnouncementRequestedNotification,
+        @{NSAccessibilityAnnouncementKey:text,NSAccessibilityPriorityKey:@(NSAccessibilityPriorityHigh)});
+
+    uint64_t ticket = ++self.toastTicket;
+    __weak OCPicker *weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2800 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+        OCPicker *picker = weakSelf;
+        if (picker && picker.toastTicket == ticket) {
+            [picker.toast orderOut:nil];
+            picker.toast = nil;
+        }
+    });
+}
+
 - (BOOL)canPasteToOrigin {
     pid_t own = NSProcessInfo.processInfo.processIdentifier;
     NSRunningApplication *origin = self.origin;
     if (!origin || origin.terminated || origin.processIdentifier == own) {
-        [self setMessage:@"Buka panel dari aplikasi tujuan tempel."];
+        [self setWarning:@"Buka panel dari aplikasi tujuan tempel."];
         return NO;
     }
     pid_t front = NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier;
     if (front == origin.processIdentifier || front == own) return YES;
-    [self setMessage:@"Aplikasi tujuan sudah berganti."];
+    [self setWarning:@"Aplikasi tujuan sudah berganti."];
     return NO;
 }
 
@@ -1253,7 +1361,7 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
     NSSearchField *field = self.activeSearch;
     NSAlert *alert = [NSAlert new];
     alert.messageText = collection ? @"Ubah nama koleksi" : @"Tambah koleksi";
-    NSTextField *name = [NSTextField textFieldWithString:collection[@"title"] ?: @""];
+    NSTextField *name = [OCEditableTextField textFieldWithString:collection[@"title"] ?: @""];
     name.placeholderString = @"Nama koleksi";
     name.frame = NSMakeRect(0,0,245,24);
     alert.accessoryView = name;

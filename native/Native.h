@@ -11,6 +11,26 @@ static inline NSTextField *OCLabel(NSString *text, CGFloat size, NSFontWeight we
     return label;
 }
 
+// Accessory apps can lack a working main menu while a panel is key, so text editing
+// shortcuts are routed to the first responder directly.
+static inline BOOL OCPerformEditShortcut(NSEvent *event, NSResponder *target) {
+    NSEventModifierFlags flags = event.modifierFlags & (NSEventModifierFlagCommand |
+        NSEventModifierFlagControl | NSEventModifierFlagOption | NSEventModifierFlagShift);
+    NSString *key = event.charactersIgnoringModifiers.lowercaseString;
+    SEL action = NULL;
+    if (flags == NSEventModifierFlagCommand) {
+        if ([key isEqualToString:@"x"]) action = @selector(cut:);
+        else if ([key isEqualToString:@"c"]) action = @selector(copy:);
+        else if ([key isEqualToString:@"v"]) action = @selector(paste:);
+        else if ([key isEqualToString:@"a"]) action = @selector(selectAll:);
+        else if ([key isEqualToString:@"z"]) action = NSSelectorFromString(@"undo:");
+    } else if (flags == (NSEventModifierFlagCommand | NSEventModifierFlagShift) && [key isEqualToString:@"z"]) {
+        action = NSSelectorFromString(@"redo:");
+    }
+    if (!action || !target || ![target respondsToSelector:action]) return NO;
+    return [NSApp sendAction:action to:target from:nil];
+}
+
 BOOL OCSend(NSDictionary *command);
 void OCConfirmClearHistory(NSWindow *window, BOOL all, dispatch_block_t confirm);
 BOOL OCGetCaret(pid_t pid, NSRect *result);

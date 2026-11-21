@@ -1,4 +1,12 @@
 #import "Toolbar.h"
+#import "Native.h"
+
+@implementation OCEditableTextField
+- (BOOL)performKeyEquivalent:(NSEvent *)event {
+    if (self.window.firstResponder == self.currentEditor && OCPerformEditShortcut(event, self.currentEditor)) return YES;
+    return [super performKeyEquivalent:event];
+}
+@end
 
 const CGFloat OCToolbarHeight = 36;
 static const CGFloat OCToolbarRadius = 11;
