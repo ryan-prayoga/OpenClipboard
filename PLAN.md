@@ -23,7 +23,7 @@ Target pengujian pertama adalah Mac Apple Silicon dengan macOS 27.2.1. Bundle `.
 | Pilihan | Perilaku |
 | --- | --- |
 | **Dekat kursor teks** (bawaan) | Buka daftar ringkas dekat caret. Gunakan posisi pointer saat posisi caret tidak tersedia. |
-| **Panel bawah layar** | Buka panel lebar di tepi bawah layar tempat pointer berada. Tampilkan klip sebagai deretan kartu yang dapat digulir horizontal. |
+| **Panel bawah layar** | Buka panel selebar layar di tepi bawah monitor tempat pointer berada. Tampilkan klip sebagai deretan kartu yang dapat digulir horizontal. |
 
 **Jalankan saat login** awalnya nonaktif. Tampilkan status pendaftaran dari macOS dan tautan ke pengaturan login jika perlu persetujuan. Saat dimulai oleh login, aplikasi berjalan di latar belakang. Saat dibuka secara manual, tampilkan Pengaturan untuk pemulihan dan perubahan preferensi. Gunakan `SMAppService.mainApp` dan uji pembukaan ulang lewat siklus AppKit. [Login item Apple](https://developer.apple.com/documentation/servicemanagement/smappservice/mainapp) · [Siklus AppKit](https://developer.apple.com/documentation/appkit/nsapplicationdelegate)
 
@@ -35,17 +35,17 @@ Target pengujian pertama adalah Mac Apple Silicon dengan macOS 27.2.1. Bundle `.
 
 ### Popup di dekat kursor teks
 
-- Shortcut global yang bisa diubah membuka panel Liquid Glass dan langsung memfokuskan pencarian. Panel muncul di bawah caret, berpindah ke atas kalau ruangnya sempit, dan tetap di area layar yang bisa dipakai.
+- Shortcut global yang bisa diubah membuka panel Liquid Glass dan langsung memfokuskan hasil. Panel muncul di bawah caret, berpindah ke atas kalau ruangnya sempit, dan tetap di area layar yang bisa dipakai.
 - Ambil posisi dari kolom teks yang sedang aktif sebelum popup mengambil fokus. Gunakan posisi karakter di sekitar caret untuk menyelaraskan baris dan sejajarkan awal teks pencarian dengan caret. Jika posisi teks tidak tersedia, gunakan pointer.
 - Riwayat mengurutkan klip berdasarkan waktu salin atau tempel terakhir. Klip sematan tetap menampilkan ikon pin dan mengikuti urutan yang sama.
 - Gunakan satu cuplikan ringkas per klip, tinggi daftar yang dibatasi, dan garis pemisah antarbagian. Item terpilih pakai warna aksen sistem.
 
 ### Panel bawah layar
 
-- Gunakan panel Liquid Glass dengan margin dari tepi layar dan Dock. Material native mengambil warna dan memburamkan jendela di belakang, sementara tepi kaca memakai gaya Clear. Saat pengurangan transparansi aktif, gunakan latar padat. Sesuaikan lebar panel dengan area layar yang tersedia, termasuk saat pointer berada di monitor kedua.
+- Rentangkan panel Liquid Glass selebar monitor tempat pointer berada, dengan jarak vertikal dari Dock. Material native mengambil warna dan memburamkan jendela di belakang, sementara tepi kaca memakai gaya Clear. Saat pengurangan transparansi aktif, gunakan latar padat.
 - Bilah atas memuat pencarian, tombol **Koleksi** di sampingnya, dan menu **⋯**. Tombol **Koleksi** membuka daftar yang bisa dicari. Pilih nama koleksi untuk menampilkan isinya dalam panel yang sama.
 - Isi kartu menyesuaikan jenis klip, misalnya pratinjau gambar, cuplikan teks, atau swatch warna. Tampilkan jenis dan waktu salin sebagai metadata ringkas. Kartu terpilih memakai indikator warna aksen sistem dan otomatis masuk ke area terlihat saat pengguna berpindah dengan keyboard.
-- Saat panel terbuka, fokus langsung ke pencarian. `Tab` memindahkan fokus ke deretan kartu saat hasil tersedia, lalu `←` dan `→` memindahkan pilihan.
+- Roda mouse biasa dan gestur horizontal trackpad dapat menggulir deretan kartu. Saat panel terbuka, `←` dan `→` langsung berpindah kartu. Bila pencarian memiliki fokus dan berisi teks, tekan `Tab` untuk kembali memfokuskan deretan kartu.
 
 ### Aksi bersama dan koleksi buatan pengguna
 
@@ -57,7 +57,7 @@ Di popup dekat kursor teks, tampilan **Koleksi** menampilkan daftar koleksi bern
 
 Pencarian berlaku pada tampilan aktif. Saat panel dibuka atau kueri maupun tampilan berubah, pilih hasil pertama jika tersedia. Jika ada pembaruan riwayat saat panel terbuka, pertahankan pilihan berdasarkan ID klip selama klip tersebut masih tampil. Tampilkan keadaan kosong saat riwayat atau koleksi kosong, dan keadaan tanpa hasil saat pencarian tidak cocok.
 
-Urutan fokus dimulai dari pencarian, hasil yang tersedia, tombol Koleksi atau Kembali, lalu menu tindakan. Ketikan dari hasil langsung memfokuskan pencarian dan menambahkan teks ke akhir kueri aktif. Saat pengguna mengetik, tombol arah horizontal menggerakkan caret.
+Saat panel dibuka, fokus dimulai di hasil dan klip pertama terpilih jika tersedia. Ketikan langsung memfokuskan pencarian dan menambahkan karakter pertama ke kueri. `Tab` berputar antara pencarian, hasil yang tersedia, tombol Koleksi atau Kembali, dan menu tindakan. Saat pengguna mengetik, tombol arah horizontal menggerakkan caret.
 
 | Tombol | Perilaku |
 | --- | --- |
@@ -66,11 +66,12 @@ Urutan fokus dimulai dari pencarian, hasil yang tersedia, tombol Koleksi atau Ke
 | `⇧↑` / `⇧↓` atau Shift+klik | Pilih klip di antara titik awal dan posisi terakhir, termasuk kedua ujung rentang. |
 | `⌘` + klik | Tambahkan atau lepas klip satu per satu, termasuk klip yang letaknya berjauhan. |
 | `⌘1` / `⌘2` | Buka Riwayat atau daftar Koleksi. |
+| `⌘→` / `⌘←` | Di panel bawah, maju dari Riwayat ke daftar Koleksi lalu ke koleksi terpilih, atau kembali satu tingkat. |
 | `Delete` / `⌫` | Hapus klip terpilih saat hasil memiliki fokus. Di kolom pencarian, tombol ini menghapus teks. |
 | **Urungkan** / `⌘Z` | Pulihkan penghapusan klip terakhir dalam 10 detik. Pintasan berlaku saat hasil memiliki fokus. |
-| `→` | Dari akhir teks pencarian Riwayat atau dari hasil Riwayat pada popup dekat kursor, buka daftar Koleksi. Di daftar Koleksi, buka koleksi terpilih. Saat deretan kartu klip di panel bawah memiliki fokus, pilih klip di kanan. |
-| `←` | Di submenu popup, kembali ke koleksi yang tadi dipilih, termasuk saat submenu digambar ke kiri. Di deretan kartu panel bawah, pilih klip di kiri. |
-| `Enter` atau klik ganda klip | Tempel klip terpilih langsung ke aplikasi asal. Saat fokus pada kontrol, `Enter` menjalankan aksi kontrol tersebut. |
+| `→` | Di popup dekat kursor, buka daftar Koleksi dari akhir kueri atau hasil Riwayat, dan buka koleksi terpilih dari daftar Koleksi. Di panel bawah, pilih kartu berikutnya saat pencarian kosong atau fokus ada di kartu. |
+| `←` | Di submenu popup, kembali ke koleksi yang tadi dipilih, termasuk saat submenu digambar ke kiri. Di panel bawah, pilih kartu sebelumnya saat pencarian kosong atau fokus ada di kartu. |
+| `Enter` atau klik ganda klip | Tempel klip terpilih langsung ke aplikasi asal atau buka koleksi terpilih. Saat fokus pada kontrol, `Enter` menjalankan aksi kontrol tersebut. |
 | `Spasi` | Buka atau tutup pratinjau klip. Pintasan berlaku saat hasil menerima fokus atau pencarian masih kosong. Spasi tetap bisa dipakai untuk mengetik kueri beberapa kata. |
 | `Esc` | Tutup pratinjau, kembali dari isi koleksi ke daftar koleksi, atau tutup panel. |
 
@@ -106,13 +107,14 @@ Satu tindakan salin menjadi satu klip, termasuk jika pasteboard menyediakan bebe
 
 - Pengguna bisa menandai klip secara manual. **Deteksi pola sensitif** aktif secara bawaan dan memeriksa pola lokal untuk beberapa token atau private key sebelum payload klip ditulis. Pengaturan ini mengendalikan deteksi pola saja. Uji kualitasnya dengan contoh palsu, termasuk teks biasa yang mirip token.
 - Klip sensitif yang ditangkap hanya bertahan di memori selama sesi aplikasi. Tampilkan label **Item sensitif**, ikon mata dicoret, dan placeholder blur dengan panjang tetap. Saat tertutup, UI dan label aksesibilitas hanya menerima placeholder. Keluarkan isi sensitif dari pencarian, thumbnail, dan log.
+- **Lepas tanda sensitif** mengembalikan klip yang ditandai manual ke riwayat lokal bersama sematan dan koleksinya.
 - `Spasi` menampilkan klip terpilih. Tutup lagi saat pindah pilihan atau tab, tutup panel, atau aplikasi kehilangan fokus. Untuk klip sensitif yang masih tertutup, percobaan tempel menampilkan petunjuk `Spasi`. Setelah dibuka, tandai isi clipboard dengan `org.nspasteboard.ConcealedType` saat klip ditempel. Status sensitif mengikuti klip di setiap koleksi. Sematan dan keanggotaan klip sensitif berakhir bersama sesi.
 - Jika klip yang sudah tersimpan ditandai sensitif, pastikan ada ruang sesi, hapus payload, thumbnail, dan indeks aplikasi dalam transaksi, lalu tampilkan klip sebagai item sesi. Jika langkah gagal, tampilkan status kegagalan dan tawarkan hapus klip. Aktifkan `PRAGMA secure_delete=ON` untuk mengurangi jejak pada halaman SQLite yang dikelola aplikasi. Dokumentasikan bahwa salinan lama mungkin masih ada di snapshot atau cadangan sistem. [SQLite secure_delete](https://sqlite.org/pragma.html#pragma_secure_delete)
 
 ## Arsitektur awal
 
 - **UI native.** Rust menjalankan `NSApplication` lewat `objc2` dan `objc2-app-kit` di main thread. Delegate, tampilan, dan akses pasteboard memakai AppKit Objective-C melalui antarmuka C. Worker riwayat serta aturan penyimpanan dan klasifikasi ada di Rust. Panel Liquid Glass memakai `NSPanel` nonaktivasi agar papan ketik bisa masuk ke popup sementara aplikasi asal tetap di depan. Bundle memakai `LSUIElement`. [Binding AppKit](https://docs.rs/objc2-app-kit/latest/objc2_app_kit/) · [Liquid Glass AppKit](https://developer.apple.com/documentation/appkit/nsglasseffectview) · [LSUIElement](https://developer.apple.com/documentation/bundleresources/information-property-list/lsuielement)
-- **Shortcut dan posisi.** Daftarkan shortcut dengan `global-hotkey`. Pilihan tampilan menentukan posisi sebelum panel mengambil fokus. Untuk popup dekat caret, ambil elemen fokus dan `kAXSelectedTextRangeAttribute`, lalu coba baca `kAXBoundsForRangeParameterizedAttribute`. Batasi waktu panggilan Accessibility dan validasi koordinat terhadap layar aktif. Minta izin Accessibility untuk posisi berbasis caret. Panel bawah memakai area tersedia dari layar tempat pointer berada dan bisa dibuka saat izin Accessibility ditolak. [Global hotkey](https://docs.rs/global-hotkey/latest/global_hotkey/) · [Apple Accessibility API](https://developer.apple.com/documentation/applicationservices/axuielement_h) · [Bounds for range](https://developer.apple.com/documentation/applicationservices/kaxboundsforrangeparameterizedattribute)
+- **Shortcut dan posisi.** Daftarkan shortcut dengan `global-hotkey`. Pilihan tampilan menentukan posisi sebelum panel mengambil fokus. Untuk popup dekat caret, ambil elemen fokus dan `kAXSelectedTextRangeAttribute`, lalu coba baca `kAXBoundsForRangeParameterizedAttribute`. Batasi waktu panggilan Accessibility dan validasi koordinat terhadap layar aktif. Minta izin Accessibility untuk posisi berbasis caret. Panel bawah memakai lebar penuh monitor tempat pointer berada dan bisa dibuka saat izin Accessibility ditolak. [Global hotkey](https://docs.rs/global-hotkey/latest/global_hotkey/) · [Apple Accessibility API](https://developer.apple.com/documentation/applicationservices/axuielement_h) · [Bounds for range](https://developer.apple.com/documentation/applicationservices/kaxboundsforrangeparameterizedattribute)
 - **Perekaman.** Cek `NSPasteboard.changeCount` tiap 125 ms dan baca data hanya saat berubah. Catat perubahan yang dibuat app saat mengembalikan klip untuk mencegah perekaman ulang. Polling bisa melewatkan klip yang langsung tertimpa sebelum pemeriksaan berikutnya. Kirim tangkapan yang lolos aturan perekaman, pengecualian, dan klasifikasi sensitif ke penyimpanan yang sesuai. [Change count Apple](https://developer.apple.com/documentation/appkit/nspasteboard/changecount) · [Izin pasteboard](https://developer.apple.com/documentation/appkit/nspasteboard/accessbehavior-swift.enum/default)
 - **Penyimpanan.** Gunakan SQLite lewat `rusqlite`, dengan satu worker database dan rollback journal mode `DELETE` sebagai titik awal. Simpan metadata klip, data format asli, thumbnail, koleksi, dan relasi klip–koleksi. Terapkan penambahan dan pemangkasan klip dalam satu transaksi. Urutan item, jenis representasi, dan byte asli menentukan duplikat. Saat pengguna menyalin ulang payload identik dari aplikasi sumber, perbarui waktu pada entri yang sama dan pertahankan sematan serta koleksinya. Jika payload cocok dengan klip yang ditandai sensitif pada sesi aktif, tangkapan mengikuti kebijakan penyimpanan sesi. [Dokumentasi rusqlite](https://docs.rs/rusqlite/latest/rusqlite/) · [SQLite journal mode](https://sqlite.org/pragma.html#pragma_journal_mode)
 - **Responsivitas.** Kerjakan operasi SQLite dan pembuatan thumbnail di luar main thread. Muat metadata serta thumbnail yang sedang terlihat. Mulai dari pencarian substring dengan data terbatas. Ukur sebelum menambah indeks pencarian khusus.
@@ -180,7 +182,7 @@ Jalankan `cargo fmt --check` dan `cargo test --locked` setelah proyek Cargo ters
 
 ## Pengukuran performa
 
-Target awal pada build release adalah **p95 di bawah 100 ms** dari shortcut sampai kolom pencarian menerima input, dan **p95 di bawah 50 ms** untuk memperbarui hasil pada 500 klip. Ambil minimal 50 sampel per metrik pada tiap tampilan dengan campuran teks dan gambar. Catat waktu pembukaan pertama secara terpisah. Ukur RAM, CPU, dan wakeup selama lima menit dengan panel tertutup, lalu catat dampak perekaman dan pembuatan thumbnail. Keputusan tentang interval polling dan batas gambar mengikuti hasil pengukuran.
+Target awal pada build release adalah **p95 di bawah 100 ms** dari shortcut sampai panel siap menerima input keyboard, dan **p95 di bawah 50 ms** untuk memperbarui hasil pada 500 klip. Ambil minimal 50 sampel per metrik pada tiap tampilan dengan campuran teks dan gambar. Catat waktu pembukaan pertama secara terpisah. Ukur RAM, CPU, dan wakeup selama lima menit dengan panel tertutup, lalu catat dampak perekaman dan pembuatan thumbnail. Keputusan tentang interval polling dan batas gambar mengikuti hasil pengukuran.
 
 Pengukuran rilis pada 19 November 2026 menggunakan 500 klip sintetis (437 teks dan 63 gambar), TextEdit sebagai aplikasi asal, dan 50 sampel setelah pembukaan pertama untuk setiap tampilan. Pengukuran buka dimulai pada penerimaan event shortcut dan berakhir saat kolom pencarian menerima fokus. Pengukuran pencarian mencakup permintaan ke worker SQLite dan pembaruan hasil di panel.
 

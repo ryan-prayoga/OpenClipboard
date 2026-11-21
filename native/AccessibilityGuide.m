@@ -80,10 +80,11 @@ static NSImage *GuideSymbol(NSString *name, CGFloat size) {
     glass.material = NSVisualEffectMaterialPopover;
     glass.blendingMode = NSVisualEffectBlendingModeBehindWindow;
     glass.state = NSVisualEffectStateActive;
-    glass.wantsLayer = YES;
-    glass.layer.cornerRadius = 24;
-    glass.layer.cornerCurve = kCACornerCurveContinuous;
-    glass.layer.masksToBounds = YES;
+    glass.maskImage = [NSImage imageWithSize:bounds.size flipped:NO drawingHandler:^BOOL(NSRect rect) {
+        [NSColor.blackColor setFill];
+        [[NSBezierPath bezierPathWithRoundedRect:rect xRadius:24 yRadius:24] fill];
+        return YES;
+    }];
     self.panel.contentView = glass;
 
     self.prompt = [[NSView alloc] initWithFrame:bounds];
@@ -113,6 +114,13 @@ static NSImage *GuideSymbol(NSString *name, CGFloat size) {
         bundleURL = nil;
     }
     self.dragIcon = [[OCAppDragIcon alloc] initWithFrame:NSMakeRect(18, 62, 326, 58) bundleURL:bundleURL];
+    __weak OCAccessibilityGuide *weakSelf = self;
+    self.dragIcon.onDrop = ^(NSPoint point) {
+        OCAccessibilityGuide *guide = weakSelf;
+        if (!guide.panel.visible || ![OCSystemSettingsWindowTracker isSettingsWindowAtPoint:point]) return;
+        [guide closeGuide:nil];
+        if (OCAccessibilityReady() && guide.permissionChanged) guide.permissionChanged();
+    };
     [self.prompt addSubview:self.dragIcon];
 
     self.instructions = [NSTextField wrappingLabelWithString:@""];

@@ -96,6 +96,9 @@ enum Request {
     MarkSensitive {
         id: i64,
     },
+    UnmarkSensitive {
+        id: i64,
+    },
 }
 
 static WORKER: OnceLock<mpsc::SyncSender<Work>> = OnceLock::new();
@@ -298,6 +301,7 @@ fn error_reason(error: Error) -> &'static str {
         Error::Storage => "storage",
         Error::UndoUnavailable => "undo_unavailable",
         Error::UndoFull => "undo_full",
+        Error::NotManuallySensitive => "not_manually_sensitive",
     }
 }
 
@@ -366,6 +370,7 @@ fn handle_request(history: &mut History, request: Request) -> Result<(), Error> 
             history.expire()?;
         }
         Request::MarkSensitive { id } => history.mark_sensitive(id)?,
+        Request::UnmarkSensitive { id } => history.unmark_sensitive(id, create_thumbnail)?,
     }
     emit(json!({"kind":"changed"}));
     Ok(())

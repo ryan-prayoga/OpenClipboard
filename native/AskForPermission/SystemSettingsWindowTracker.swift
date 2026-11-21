@@ -6,10 +6,14 @@ import CoreGraphics
 @MainActor
 @objc(OCSystemSettingsWindowTracker)
 public final class SystemSettingsWindowTracker: NSObject {
+    private static var settingsPID: pid_t? {
+        NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.systempreferences")
+            .first?.processIdentifier
+    }
+
     @objc public static func windowFrame() -> NSRect {
-        let settings = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.systempreferences")
         let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
-        guard let pid = settings.first?.processIdentifier, let primary = NSScreen.screens.first,
+        guard let pid = settingsPID, let primary = NSScreen.screens.first,
               let windows = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[CFString: Any]]
         else { return .zero }
 
@@ -30,5 +34,14 @@ public final class SystemSettingsWindowTracker: NSObject {
         // The Window Server reports Y down from the main display; AppKit measures Y up.
         return NSRect(x: largest.minX, y: primary.frame.maxY - largest.maxY,
                       width: largest.width, height: largest.height)
+    }
+
+    @objc(isSettingsWindowAtPoint:)
+    public static func isSettingsWindow(at point: NSPoint) -> Bool {
+        let number = NSWindow.windowNumber(at: point, belowWindowWithWindowNumber: 0)
+        guard number > 0, let id = CGWindowID(exactly: number), let pid = settingsPID,
+              let windows = CGWindowListCopyWindowInfo(.optionIncludingWindow, id) as? [[CFString: Any]]
+        else { return false }
+        return windows.first?[kCGWindowOwnerPID] as? pid_t == pid
     }
 }

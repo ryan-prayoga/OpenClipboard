@@ -16,6 +16,7 @@ public final class DraggableAppIconView: NSView, NSDraggingSource {
 
     @objc public var canDrag: Bool { bundleURL != nil }
     @objc public var isInteracting: Bool { mouseDownEvent != nil || hasStartedDrag }
+    @objc public var onDrop: ((NSPoint) -> Void)?
 
     @objc(initWithFrame:bundleURL:)
     public init(frame: NSRect, bundleURL: URL?) {
@@ -175,10 +176,13 @@ public final class DraggableAppIconView: NSView, NSDraggingSource {
         endedAt screenPoint: NSPoint,
         operation: NSDragOperation
     ) {
-        window?.ignoresMouseEvents = false
+        let sourceWindow = window
         mouseDownEvent = nil
         hasStartedDrag = false
         needsDisplay = true
+        // Keep the guide click-through until its controller identifies the drop target.
+        if !operation.isEmpty { onDrop?(screenPoint) }
+        sourceWindow?.ignoresMouseEvents = false
     }
 
     @objc public func playHint() {

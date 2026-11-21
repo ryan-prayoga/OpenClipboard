@@ -20,6 +20,7 @@ pub(crate) struct Summary {
     pub last_used: i64,
     pub pinned: bool,
     pub sensitive: bool,
+    pub manually_sensitive: bool,
     #[serde(skip)]
     pub bytes: usize,
     pub width: usize,

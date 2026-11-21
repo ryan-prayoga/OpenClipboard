@@ -29,6 +29,24 @@ static NSScreen *ScreenAt(NSPoint point) {
 - (BOOL)canBecomeMainWindow { return NO; }
 @end
 
+@interface OCHorizontalScrollView : NSScrollView
+@end
+
+@implementation OCHorizontalScrollView
+- (void)scrollWheel:(NSEvent *)event {
+    if (event.hasPreciseScrollingDeltas || event.scrollingDeltaX != 0 || event.scrollingDeltaY == 0) {
+        [super scrollWheel:event];
+        return;
+    }
+
+    NSClipView *clip = self.contentView;
+    NSRect bounds = clip.bounds;
+    bounds.origin.x -= event.scrollingDeltaY * self.horizontalLineScroll;
+    [clip scrollToPoint:[clip constrainBoundsRect:bounds].origin];
+    [self reflectScrolledClipView:clip];
+}
+@end
+
 static NSImage *GlassMask(NSSize size, CGFloat radius) {
     return [NSImage imageWithSize:size flipped:NO drawingHandler:^BOOL(NSRect destination) {
         [NSColor.blackColor setFill];
@@ -220,11 +238,15 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
     BOOL hasCaret = !bottom && OCGetCaret(self.origin.processIdentifier,&caret);
     NSPoint anchor = hasCaret ? caret.origin : pointer;
     NSScreen *screen = ScreenAt(anchor);
-    NSRect room = NSInsetRect(screen.visibleFrame, bottom ? 24 : 12, bottom ? 17 : 12);
-    CGFloat width = MIN(bottom ? 1450 : 432, room.size.width);
+    NSRect room = NSInsetRect(screen.visibleFrame, bottom ? 0 : 12, bottom ? 17 : 12);
+    if (bottom) {
+        room.origin.x = NSMinX(screen.frame);
+        room.size.width = NSWidth(screen.frame);
+    }
+    CGFloat width = bottom ? NSWidth(room) : MIN(432, NSWidth(room));
     CGFloat targetHeight = bottom ? (width >= 710 ? 328 : 372) : 380;
     CGFloat height = MIN(targetHeight, room.size.height);
-    CGFloat x = NSMidX(room) - width/2;
+    CGFloat x = NSMinX(room);
     CGFloat y = NSMinY(room);
     if (!bottom) {
         const CGFloat gap = 8;
@@ -242,7 +264,7 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
     [self buildMain:PanelContent(self.panel)];
     [self installMonitors];
     [self.panel makeKeyAndOrderFront:nil];
-    if ([self.panel makeFirstResponder:self.search]) ReportMetric("open", self.bottom, started);
+    if ([self.panel makeFirstResponder:self.results]) ReportMetric("open", self.bottom, started);
     [self fetchCatalog];
 }
 
@@ -347,7 +369,8 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
 }
 
 - (NSScrollView *)makeScroll:(NSRect)rect inView:(NSView *)view horizontal:(BOOL)horizontal {
-    NSScrollView *scroll = [[NSScrollView alloc] initWithFrame:rect];
+    NSScrollView *scroll = horizontal ? [[OCHorizontalScrollView alloc] initWithFrame:rect]
+                                     : [[NSScrollView alloc] initWithFrame:rect];
     scroll.drawsBackground = NO;
     scroll.borderType = NSNoBorder;
     scroll.hasVerticalScroller = !horizontal;
@@ -521,7 +544,8 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
         self.payloadMode = OCIdle;
         NSString *description = @{@"full":@"Ruang penyimpanan tidak cukup.",
             @"missing":@"Klip ini sudah tidak tersedia.", @"collection_name":@"Nama koleksi kosong, terlalu panjang, atau sudah dipakai.",
-            @"collection_missing":@"Koleksi sudah tidak tersedia."}[reason];
+            @"collection_missing":@"Koleksi sudah tidak tersedia.",
+            @"not_manually_sensitive":@"Klip ini ditandai oleh deteksi otomatis."}[reason];
         [self setMessage:description ?: @"Tindakan gagal. Coba lagi."];
     } else if ([kind isEqualToString:@"catalog"] && [event[@"ticket"] unsignedLongLongValue] == self.catalogTicket) {
         NSDictionary *catalog = event[@"catalog"];
@@ -594,8 +618,10 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
     BOOL inCollection = self.collection != 0;
     BOOL listing = self.browsing && !inCollection;
     BOOL namedBack = inCollection && self.inlineCollection;
+    NSString *forwardTitle = self.bottom ? @"Koleksi  ⌘→" : @"Koleksi  →";
+    NSString *historyTitle = self.bottom ? @"⌘←  Riwayat" : @"Riwayat";
     self.navigation.title = namedBack ? [NSString stringWithFormat:@"‹  %@",self.collectionName]
-        : inCollection ? @"Kembali" : self.browsing ? @"Riwayat" : @"Koleksi  →";
+        : inCollection ? @"Kembali" : self.browsing ? historyTitle : forwardTitle;
     self.navigation.cell.lineBreakMode = NSLineBreakByTruncatingTail;
     self.navigation.toolTip = namedBack ? [NSString stringWithFormat:@"Kembali dari %@",self.collectionName] : nil;
     [self.navigation setAccessibilityLabel:self.navigation.toolTip ?: (inCollection ? @"Kembali ke koleksi"
@@ -934,11 +960,15 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
 
 - (void)showPreview:(NSArray<NSDictionary *> *)parts sensitive:(BOOL)sensitive id:(int64_t)clip {
     [self clearPreview];
+    NSRect available = (self.activePanel.screen ?: NSScreen.mainScreen).visibleFrame;
+    NSSize size = NSMakeSize(floor(MIN(640, NSWidth(available) * 0.72)),
+                             floor(MIN(460, NSHeight(available) * 0.55)));
+    NSRect body = NSMakeRect(16,14,size.width-32,size.height-54);
     NSViewController *controller = [NSViewController new];
-    NSView *view = [[NSView alloc] initWithFrame:NSMakeRect(0,0,330,234)];
+    NSView *view = [[NSView alloc] initWithFrame:NSMakeRect(0,0,size.width,size.height)];
     controller.view = view;
     NSTextField *title = OCLabel(sensitive ? @"Item sensitif" : @"Pratinjau",13,NSFontWeightSemibold);
-    title.frame = NSMakeRect(13,204,305,19);
+    title.frame = NSMakeRect(NSMinX(body),size.height-29,NSWidth(body),19);
     [view addSubview:title];
 
     NSString *kind = [self selectedIn:self.activeResults][@"kind"];
@@ -956,14 +986,14 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
     }
     if (image) {
         NSImageView *preview = [NSImageView imageViewWithImage:image];
-        preview.frame = NSMakeRect(13,12,304,186);
+        preview.frame = body;
         preview.imageScaling = NSImageScaleProportionallyUpOrDown;
         [view addSubview:preview];
     } else {
-        NSScrollView *scroll = [[NSScrollView alloc] initWithFrame:NSMakeRect(10,11,310,186)];
-        scroll.hasVerticalScroller = YES;
+        NSScrollView *scroll = [NSTextView scrollableTextView];
+        scroll.frame = body;
         scroll.autohidesScrollers = YES;
-        NSTextView *preview = [[NSTextView alloc] initWithFrame:NSMakeRect(0,0,310,186)];
+        NSTextView *preview = (NSTextView *)scroll.documentView;
         if ([kind isEqualToString:@"json"] && text.length) {
             id object = [NSJSONSerialization JSONObjectWithData:[text dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
             if (object) {
@@ -978,7 +1008,6 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
         preview.font = ([kind isEqualToString:@"json"] || [kind isEqualToString:@"kode"])
             ? [NSFont monospacedSystemFontOfSize:12 weight:NSFontWeightRegular] : [NSFont systemFontOfSize:13];
         scroll.drawsBackground = NO;
-        scroll.documentView = preview;
         [view addSubview:scroll];
     }
     self.preview = [NSPopover new];
@@ -986,6 +1015,7 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
     self.preview.behavior = NSPopoverBehaviorTransient;
     self.preview.delegate = self;
     self.preview.contentViewController = controller;
+    self.preview.contentSize = size;
     if (sensitive) {
         self.revealed = clip;
         [self setMessage:@"Item sensitif terbuka. Enter menempelkan klip."];
@@ -1038,6 +1068,7 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
     BOOL composing = [editor isKindOfClass:NSTextView.class] && [(NSTextView *)editor hasMarkedText];
     BOOL emptySearch = searchFocused && !composing && !(editor ? editor.string.length : search.stringValue.length);
     BOOL preview = self.preview.shown;
+    BOOL horizontalArrow = results.horizontal && (key == kVK_LeftArrow || key == kVK_RightArrow);
     NSButton *undoButton = self.side ? self.sideUndoButton : self.undoButton;
 
     if (flags == NSEventModifierFlagCommand && key == kVK_ANSI_Z && resultFocused && self.undoTicket) {
@@ -1048,9 +1079,24 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
         if (!event.isARepeat) [self navigateTo:key == kVK_ANSI_1 ? 0 : 1];
         return nil;
     }
+    if (flags == NSEventModifierFlagCommand && horizontalArrow && !composing) {
+        if (event.isARepeat) return nil;
+        if (key == kVK_LeftArrow) {
+            if (self.collection) [self closeCollection];
+            else if (self.browsing) [self navigateTo:0];
+        } else if (!self.browsing) {
+            [self navigateTo:1];
+        } else if (results.collections) {
+            [self pick:results.selected in:results confirm:YES];
+        }
+        return nil;
+    }
     if (resultFocused && !preview && event.window == window &&
         !(flags & (NSEventModifierFlagCommand | NSEventModifierFlagControl)) &&
-        [self focusSearchForTyping:event inWindow:window field:search]) return event;
+        [self focusSearchForTyping:event inWindow:window field:search]) {
+        [self refreshSelectionHint:results];
+        return event;
+    }
     if (flags & (NSEventModifierFlagCommand | NSEventModifierFlagControl | NSEventModifierFlagOption)) return event;
 
     if (!flags && (key == kVK_Delete || key == kVK_ForwardDelete) &&
@@ -1104,11 +1150,11 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
             return nil;
         }
     }
-    if (!flags && key == kVK_RightArrow && !preview) {
+    if (!flags && key == kVK_RightArrow && !preview && !horizontalArrow) {
         NSRange selection = editor.selectedRange;
         BOOL searchAtEnd = emptySearch || (searchFocused && editor && !composing &&
             selection.length == 0 && selection.location == editor.string.length);
-        if (!self.browsing && (searchAtEnd || (resultFocused && !self.bottom))) {
+        if (!self.browsing && (searchAtEnd || resultFocused)) {
             if (!event.isARepeat) [self navigateTo:1];
             return nil;
         }
@@ -1121,7 +1167,7 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
         [self showClipActions];
         return nil;
     }
-    if (resultFocused && !flags && key == kVK_LeftArrow) {
+    if (resultFocused && !flags && key == kVK_LeftArrow && !horizontalArrow) {
         if (self.collection && !self.bottom) { [self closeCollection]; return nil; }
         if (results.collections) { [self navigateTo:0]; return nil; }
     }
@@ -1129,11 +1175,13 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
         (key == kVK_UpArrow || key == kVK_DownArrow);
     if (results.rows.count && (!flags || extend)) {
         BOOL downFromSearch = searchFocused && !composing && key == kVK_DownArrow;
-        BOOL previous = key == kVK_UpArrow || (self.bottom && key == kVK_LeftArrow);
-        BOOL next = key == kVK_DownArrow || (self.bottom && key == kVK_RightArrow);
+        BOOL horizontalFromSearch = horizontalArrow && emptySearch && !preview;
+        BOOL previous = key == kVK_UpArrow || (horizontalArrow && key == kVK_LeftArrow);
+        BOOL next = key == kVK_DownArrow || (horizontalArrow && key == kVK_RightArrow);
         BOOL extendFromSearch = extend && emptySearch;
-        if ((!flags && downFromSearch) || extendFromSearch || (resultFocused && (previous || next))) {
-            if (searchFocused) [window makeFirstResponder:results];
+        if ((!flags && (downFromSearch || horizontalFromSearch)) || extendFromSearch ||
+            (resultFocused && (previous || next))) {
+            if (searchFocused && ![window makeFirstResponder:results]) return event;
             NSInteger index = Clamp(results.selected + (previous ? -1 : 1),0,(NSInteger)results.rows.count-1);
             [self pick:index in:results action:extend ? OCResultExtendSelection : OCResultSelect];
             return nil;
@@ -1278,9 +1326,13 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
         [menu addItem:[self item:@"Keluarkan dari koleksi" action:@selector(runMenuAction:)
             value:@{@"action":@"membership",@"id":identifier,@"collection":@(self.collection),@"add":@NO}]];
     }
-    if (![row[@"sensitive"] boolValue])
+    if ([row[@"manually_sensitive"] boolValue]) {
+        [menu addItem:[self item:@"Lepas tanda sensitif" action:@selector(runMenuAction:)
+            value:@{@"action":@"unmark_sensitive",@"id":identifier}]];
+    } else if (![row[@"sensitive"] boolValue]) {
         [menu addItem:[self item:@"Tandai sensitif" action:@selector(runMenuAction:)
             value:@{@"action":@"mark_sensitive",@"id":identifier}]];
+    }
     return menu;
 }
 

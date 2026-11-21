@@ -20,6 +20,7 @@ pub(crate) enum Error {
     CollectionMissing,
     UndoUnavailable,
     UndoFull,
+    NotManuallySensitive,
 }
 
 impl From<rusqlite::Error> for Error {
@@ -47,6 +48,7 @@ struct SessionClip {
     parts: Vec<Part>,
     digest: Vec<u8>,
     summary: Summary,
+    restore_color: Option<String>,
 }
 
 pub(crate) struct History {
@@ -163,7 +165,7 @@ impl History {
             .any(|clip| clip.digest == digest);
         if was_sensitive || (detect && clip::sensitive(&parts)) {
             if let Some(id) = existing {
-                self.mark_sensitive(id)?;
+                self.move_to_sensitive_session(id, false)?;
                 if let Some(clip) = self.session.get_mut(&id) {
                     clip.summary.copied = copied;
                     clip.summary.last_used = copied;
@@ -178,7 +180,8 @@ impl History {
                 SessionClip {
                     parts,
                     digest,
-                    summary: sensitive_summary(id, copied, copied, false, bytes, Vec::new()),
+                    summary: sensitive_summary(id, copied, copied, false, bytes, Vec::new(), false),
+                    restore_color: None,
                 },
             );
             self.next_session_id -= 1;
@@ -233,6 +236,7 @@ impl History {
                 height: row.get(7)?,
                 color: row.get(8)?,
                 sensitive: false,
+                manually_sensitive: false,
                 collections: Vec::new(),
             })
         })?;
@@ -500,6 +504,10 @@ impl History {
                 .find(|clip| clip.digest == deleted.digest)
             {
                 current.summary.pinned |= deleted.summary.pinned;
+                if current.restore_color.is_none() && deleted.restore_color.is_some() {
+                    current.restore_color = deleted.restore_color;
+                    current.summary.manually_sensitive = true;
+                }
                 current
                     .summary
                     .collections
@@ -592,16 +600,20 @@ impl History {
     }
 
     pub fn mark_sensitive(&mut self, id: i64) -> Result<()> {
+        self.move_to_sensitive_session(id, true)
+    }
+
+    fn move_to_sensitive_session(&mut self, id: i64, manually_marked: bool) -> Result<()> {
         if self.session.contains_key(&id) {
             return Ok(());
         }
         let (parts, _) = self.payload(id)?;
         let bytes = bytes_of(&parts);
         self.ensure_session_space(bytes)?;
-        let (digest, copied, last_used, pinned) = self.disk.query_row(
-            "SELECT digest,copied,MAX(copied,COALESCE(pasted,copied)),pinned FROM clips WHERE id=?1",
+        let (digest, copied, last_used, pinned, color) = self.disk.query_row(
+            "SELECT digest,copied,MAX(copied,COALESCE(pasted,copied)),pinned,color FROM clips WHERE id=?1",
             [id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
         )?;
         let collections = {
             let mut select = self
@@ -619,9 +631,58 @@ impl History {
             SessionClip {
                 parts,
                 digest,
-                summary: sensitive_summary(id, copied, last_used, pinned, bytes, collections),
+                summary: sensitive_summary(
+                    id,
+                    copied,
+                    last_used,
+                    pinned,
+                    bytes,
+                    collections,
+                    manually_marked,
+                ),
+                restore_color: manually_marked.then_some(color),
             },
         );
+        Ok(())
+    }
+
+    pub fn unmark_sensitive(
+        &mut self,
+        id: i64,
+        thumbnail: impl FnOnce(&[Part]) -> Thumbnail,
+    ) -> Result<()> {
+        let clip = self.session.get(&id).ok_or(Error::Missing)?;
+        let color = clip
+            .restore_color
+            .clone()
+            .ok_or(Error::NotManuallySensitive)?;
+        let raw = bincode::serialize(&clip.parts).map_err(|_| Error::Storage)?;
+        let thumbnail = thumbnail(&clip.parts);
+        if clip.parts.iter().any(Part::image) && thumbnail.bytes.is_empty() {
+            return Err(Error::Storage);
+        }
+        let (kind, title, search, color) = clip::metadata(&clip.parts, color);
+        let summary = &clip.summary;
+        let pasted = (summary.last_used > summary.copied).then_some(summary.last_used);
+        let bytes = summary.bytes + thumbnail.bytes.len();
+
+        let transaction = self.disk.transaction()?;
+        transaction.execute(
+            "INSERT INTO clips (id,digest,parts,bytes,kind,title,search,color,thumbnail,width,height,copied,pasted,pinned)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
+            params![id, clip.digest, raw, bytes, kind, title, search, color, thumbnail.bytes,
+                thumbnail.width, thumbnail.height, summary.copied, pasted, summary.pinned],
+        )?;
+        {
+            let mut add_membership =
+                transaction.prepare("INSERT INTO memberships(clip,collection) VALUES(?1,?2)")?;
+            for collection in &summary.collections {
+                add_membership.execute(params![id, collection])?;
+            }
+        }
+        trim(&transaction, self.limit, Some(id))?;
+        transaction.commit()?;
+        self.session.remove(&id);
         Ok(())
     }
 
@@ -652,6 +713,7 @@ fn sensitive_summary(
     pinned: bool,
     bytes: usize,
     collections: Vec<i64>,
+    manually_sensitive: bool,
 ) -> Summary {
     Summary {
         id,
@@ -659,6 +721,7 @@ fn sensitive_summary(
         last_used,
         pinned,
         sensitive: true,
+        manually_sensitive,
         bytes,
         collections,
         kind: "sensitif".into(),
@@ -752,13 +815,120 @@ mod tests {
     }
 
     #[test]
+    fn unmark_sensitive_restores_an_image_clip_with_its_metadata() {
+        let mut history = history();
+        let parts = vec![
+            Part {
+                item: 0,
+                mime: "public.png".into(),
+                data: vec![1, 2, 3],
+            },
+            Part {
+                item: 0,
+                mime: "public.utf8-plain-text".into(),
+                data: b"Gambar referensi".to_vec(),
+            },
+        ];
+        let make_thumbnail = |_: &[Part]| Thumbnail {
+            bytes: vec![4, 5],
+            width: 80,
+            height: 60,
+        };
+        history
+            .capture(parts.clone(), true, "#3355AA".into(), make_thumbnail)
+            .ok()
+            .unwrap();
+        let id = history.catalog("", "", 0).ok().unwrap().clips[0].id;
+        let collection = history.create_collection("Desain").ok().unwrap();
+        history.pin(id, true).ok().unwrap();
+        history.membership(id, collection, true).ok().unwrap();
+        history.mark_pasted(id).ok().unwrap();
+        let before = history
+            .catalog("referensi", "", collection)
+            .ok()
+            .unwrap()
+            .clips
+            .remove(0);
+
+        history.mark_sensitive(id).ok().unwrap();
+        let hidden = history
+            .catalog("", "", collection)
+            .ok()
+            .unwrap()
+            .clips
+            .remove(0);
+        assert!(hidden.sensitive && hidden.manually_sensitive);
+        assert!(
+            history
+                .catalog("referensi", "", 0)
+                .ok()
+                .unwrap()
+                .clips
+                .is_empty()
+        );
+        assert!(matches!(
+            history.unmark_sensitive(id, |_| Thumbnail::default()),
+            Err(Error::Storage)
+        ));
+        assert!(history.payload(id).ok().unwrap().1);
+
+        history.unmark_sensitive(id, make_thumbnail).ok().unwrap();
+        let restored = history
+            .catalog("referensi", "gambar", collection)
+            .ok()
+            .unwrap()
+            .clips
+            .remove(0);
+        assert_eq!(restored.id, id);
+        assert!(restored.pinned && !restored.sensitive && !restored.manually_sensitive);
+        assert_eq!(restored.collections, vec![collection]);
+        assert_eq!(restored.last_used, before.last_used);
+        assert_eq!(restored.copied, before.copied);
+        assert_eq!(restored.color, "#3355AA");
+        assert_eq!((restored.width, restored.height), (80, 60));
+        assert_eq!(history.thumbnail(id).ok().unwrap(), vec![4, 5]);
+        assert_eq!(history.payload(id).ok().unwrap(), (parts, false));
+        assert!(!history.session.contains_key(&id));
+    }
+
+    #[test]
+    fn automatically_detected_clip_cannot_be_unmarked() {
+        let mut history = history();
+        let parts = vec![Part {
+            item: 0,
+            mime: "public.utf8-plain-text".into(),
+            data: b"-----BEGIN PRIVATE KEY-----\nfixture\n-----END PRIVATE KEY-----".to_vec(),
+        }];
+        history
+            .capture(parts.clone(), false, String::new(), |_| {
+                Thumbnail::default()
+            })
+            .ok()
+            .unwrap();
+        let id = history.catalog("", "", 0).ok().unwrap().clips[0].id;
+
+        history
+            .capture(parts, true, String::new(), |_| Thumbnail::default())
+            .ok()
+            .unwrap();
+        let summary = history.catalog("", "", 0).ok().unwrap().clips.remove(0);
+        assert!(summary.sensitive && !summary.manually_sensitive);
+        assert!(matches!(
+            history.unmark_sensitive(id, |_| Thumbnail::default()),
+            Err(Error::NotManuallySensitive)
+        ));
+        assert_eq!(disk_usage(&history.disk).ok(), Some(0));
+    }
+
+    #[test]
     fn undo_batch_restores_payload_pin_and_membership() {
         let mut history = history();
         let ordinary = add(&mut history, "Brief desain");
-        let sensitive = add(
+        add(
             &mut history,
             "-----BEGIN PRIVATE KEY-----\nfixture\n-----END PRIVATE KEY-----",
         );
+        let sensitive = history.catalog("", "sensitif", 0).ok().unwrap().clips[0].id;
         let collection = history.create_collection("Desain").ok().unwrap();
         history.pin(ordinary, true).ok().unwrap();
         history.membership(ordinary, collection, true).ok().unwrap();
