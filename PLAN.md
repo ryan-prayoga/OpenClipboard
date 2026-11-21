@@ -52,7 +52,7 @@ Target pengujian pertama adalah Mac Apple Silicon dengan macOS 27.2.1. Bundle `.
 
 Kedua tampilan memakai riwayat, koleksi, status sematan, dan aturan privasi yang sama. Menu **⋯** memberi akses ke **Pengaturan…**, **Keluar**, dan **Panduan Accessibility…** saat izin diperlukan.
 
-Gunakan **+** di strip atau rail tab untuk menambahkan koleksi; koleksi baru langsung menjadi tab aktif. Klik kanan sebuah tab, atau menu **⋯** saat tab koleksi aktif, menyediakan **Ubah nama…** dan **Hapus koleksi…**. Penghapusan koleksi menghapus keanggotaannya saja, sehingga klip tetap ada di Riwayat dan koleksi lain; bila tab aktif dihapus, tampilan kembali ke Riwayat. Dari Riwayat, gunakan **Tambahkan ke koleksi** untuk menaruh klip ke satu atau beberapa koleksi. Klip bisa dikeluarkan dari koleksi tanpa menghapus riwayatnya.
+Gunakan **+** di strip atau rail tab untuk menambahkan koleksi; nama koleksi baru diketik langsung di tab (inline): `Enter` menyimpan dan langsung menjadikannya tab aktif, `Esc` atau pindah fokus membatalkan. Klik kanan sebuah tab, atau menu **⋯** saat tab koleksi aktif, menyediakan **Ubah nama…** (juga inline, di tab itu sendiri) dan **Hapus koleksi…** (dengan konfirmasi). Penghapusan koleksi menghapus keanggotaannya saja, sehingga klip tetap ada di Riwayat dan koleksi lain; bila tab aktif dihapus, tampilan kembali ke Riwayat. Dari Riwayat, gunakan **Tambahkan ke koleksi** untuk menaruh klip ke satu atau beberapa koleksi. Klip bisa dikeluarkan dari koleksi tanpa menghapus riwayatnya.
 
 Di popup dekat kursor teks, tab ditampilkan sebagai rail vertikal di kiri daftar klip (112 px, atau 96 px bila panel sempit). Popup selebar 520 px bila layar cukup, selain itu 432 px. Rail memakai isi dan perilaku yang sama dengan strip di panel bawah.
 

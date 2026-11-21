@@ -319,6 +319,15 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
     self.tabs.selectedID = self.activeTab;
     self.tabs.onSelect = ^(int64_t identifier) { [weakSelf selectTab:identifier]; };
     self.tabs.onAdd = ^{ [weakSelf createCollection:nil]; };
+    self.tabs.onCommit = ^(int64_t identifier, NSString *name) {
+        [weakSelf sendAction:identifier
+            ? @{@"action":@"rename_collection",@"id":@(identifier),@"name":name}
+            : @{@"action":@"create_collection",@"name":name}];
+    };
+    self.tabs.onEndEditing = ^{
+        OCPicker *picker = weakSelf;
+        [picker.panel makeFirstResponder:picker.results];
+    };
     self.tabs.onContext = ^NSMenu *(int64_t identifier) {
         OCPicker *picker = weakSelf;
         NSDictionary *row = [picker collectionRowForID:identifier];
@@ -1064,6 +1073,12 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
     BOOL horizontalArrow = results.horizontal && (key == kVK_LeftArrow || key == kVK_RightArrow);
     NSButton *undoButton = self.undoButton;
 
+    if (self.tabs.editing) {
+        // The inline name field owns the keyboard; Return and editing keys reach it untouched.
+        if (key == kVK_Escape) { [self.tabs cancelEditing]; return nil; }
+        return event;
+    }
+
     if (flags == NSEventModifierFlagCommand && key == kVK_ANSI_Z && resultFocused && self.undoTicket) {
         if (!event.isARepeat) [self undoDelete:nil];
         return nil;
@@ -1228,35 +1243,13 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
 - (void)accessibilityGuide:(id)sender { if (self.openAccessibilityGuide) self.openAccessibilityGuide(); }
 
 - (void)createCollection:(id)sender {
-    [self editCollection:nil];
+    [self clearPreview];
+    [self.tabs beginEditingCollectionID:0];
 }
 
 - (void)renameCollection:(NSMenuItem *)sender {
-    [self editCollection:sender.representedObject];
-}
-
-- (void)editCollection:(NSDictionary *)collection {
-    NSPanel *panel = self.activePanel;
-    if (!panel || panel.attachedSheet) return;
-    NSSearchField *field = self.activeSearch;
-    NSAlert *alert = [NSAlert new];
-    alert.messageText = collection ? @"Ubah nama koleksi" : @"Tambah koleksi";
-    NSTextField *name = [OCEditableTextField textFieldWithString:collection[@"title"] ?: @""];
-    name.placeholderString = @"Nama koleksi";
-    name.frame = NSMakeRect(0,0,245,24);
-    alert.accessoryView = name;
-    alert.window.initialFirstResponder = name;
-    [alert addButtonWithTitle:collection ? @"Simpan" : @"Tambah"];
-    [alert addButtonWithTitle:@"Batal"];
-    [alert beginSheetModalForWindow:panel completionHandler:^(NSModalResponse response) {
-        if (response == NSAlertFirstButtonReturn) {
-            NSDictionary *request = collection
-                ? @{@"action":@"rename_collection",@"id":collection[@"id"],@"name":name.stringValue}
-                : @{@"action":@"create_collection",@"name":name.stringValue};
-            [self sendAction:request];
-        }
-        [field.window makeFirstResponder:field];
-    }];
+    [self clearPreview];
+    [self.tabs beginEditingCollectionID:[sender.representedObject[@"id"] longLongValue]];
 }
 
 - (void)deleteCollection:(NSMenuItem *)sender {

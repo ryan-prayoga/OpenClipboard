@@ -1,5 +1,6 @@
 #import "Tabs.h"
 #import "Bridge.h"
+#import "Toolbar.h"
 
 static const CGFloat PillHeight = 28;
 static const CGFloat RailRowHeight = 30;
@@ -7,6 +8,7 @@ static const CGFloat ItemGap = 4;
 static const CGFloat PillPadding = 12;
 static const CGFloat MaxPillWidth = 160;
 static const CGFloat AddWidth = 34;
+static const CGFloat EditWidth = 150;
 
 @interface OCTabElement : NSAccessibilityElement
 @property(nonatomic, copy) void (^press)(void);
@@ -21,8 +23,11 @@ static const CGFloat AddWidth = 34;
 - (id)accessibilityValue { return @(self.selected); }
 @end
 
-@interface OCTabs ()
+@interface OCTabs () <NSTextFieldDelegate>
 @property(nonatomic) CGFloat offset;
+@property(nonatomic, strong) NSTextField *editor;
+@property(nonatomic) int64_t editingID;
+@property(nonatomic, copy) NSString *editingInitial;
 @end
 
 @implementation OCTabs
@@ -46,6 +51,20 @@ static const CGFloat AddWidth = 34;
 - (BOOL)resignFirstResponder { self.needsDisplay = YES; return YES; }
 
 - (NSInteger)tabCount { return (NSInteger)self.collections.count + 1; }
+- (BOOL)editing { return self.editor != nil; }
+
+// Index of the item being edited, or -1. A new collection edits a slot after the last tab.
+- (NSInteger)editingIndex {
+    if (!self.editor) return -1;
+    if (self.editingID == 0) return self.tabCount;
+    for (NSUInteger i = 0; i < self.collections.count; i++) {
+        if ([self.collections[i][@"id"] longLongValue] == self.editingID) return (NSInteger)i + 1;
+    }
+    return -1;
+}
+
+// Index of the "+" item: it moves one slot over while a new collection is being named.
+- (NSInteger)plusIndex { return self.tabCount + (self.editor && self.editingID == 0 ? 1 : 0); }
 
 - (int64_t)collectionIDAtIndex:(NSInteger)index {
     if (index <= 0) return 0;
@@ -61,12 +80,15 @@ static const CGFloat AddWidth = 34;
 }
 
 - (NSString *)titleAtIndex:(NSInteger)index {
+    if (index >= self.tabCount) return @"";
     return index == 0 ? @"Riwayat" : self.collections[(NSUInteger)index - 1][@"name"] ?: @"";
 }
 
 - (void)setCollections:(NSArray<NSDictionary *> *)collections {
     _collections = [collections copy] ?: @[];
+    if (self.editor && self.editingIndex < 0) [self endEditingCommit:NO];
     [self clampOffset];
+    [self layoutEditor];
     self.needsDisplay = YES;
     NSAccessibilityPostNotification(self, NSAccessibilityLayoutChangedNotification);
 }
@@ -82,18 +104,19 @@ static const CGFloat AddWidth = 34;
 - (NSFont *)font { return [NSFont systemFontOfSize:12 weight:NSFontWeightSemibold]; }
 
 - (CGFloat)pillWidthAtIndex:(NSInteger)index {
+    if (index == self.editingIndex) return EditWidth;
     CGFloat text = ceil([[self titleAtIndex:index] sizeWithAttributes:@{NSFontAttributeName:self.font}].width);
     return MIN(MaxPillWidth, PillPadding*2 + (index == 0 ? 14 : 8) + 6 + text);
 }
 
-// Frame of item `index` in content coordinates (before scrolling). Index tabCount is "+".
+// Frame of item `index` in content coordinates (before scrolling). `plusIndex` is "+".
 - (NSRect)contentFrameAtIndex:(NSInteger)index {
     if (self.orientation == OCTabsVertical) {
         return NSMakeRect(0, index * RailRowHeight, NSWidth(self.bounds), RailRowHeight);
     }
     CGFloat x = 0;
-    for (NSInteger i = 0; i < index && i < self.tabCount; i++) x += [self pillWidthAtIndex:i] + ItemGap;
-    CGFloat width = index == self.tabCount ? AddWidth : [self pillWidthAtIndex:index];
+    for (NSInteger i = 0; i < index && i < self.plusIndex; i++) x += [self pillWidthAtIndex:i] + ItemGap;
+    CGFloat width = index == self.plusIndex ? AddWidth : [self pillWidthAtIndex:index];
     return NSMakeRect(x, (NSHeight(self.bounds)-PillHeight)/2, width, PillHeight);
 }
 
@@ -105,7 +128,7 @@ static const CGFloat AddWidth = 34;
 }
 
 - (CGFloat)contentLength {
-    NSRect last = [self contentFrameAtIndex:self.tabCount];
+    NSRect last = [self contentFrameAtIndex:self.plusIndex];
     return self.orientation == OCTabsVertical ? NSMaxY(last) + 4 : NSMaxX(last);
 }
 
@@ -120,22 +143,26 @@ static const CGFloat AddWidth = 34;
 - (void)setFrameSize:(NSSize)size {
     [super setFrameSize:size];
     [self clampOffset];
+    [self layoutEditor];
     self.needsDisplay = YES;
 }
 
-- (void)scrollSelectedToVisible {
-    NSRect frame = [self contentFrameAtIndex:self.selectedIndex];
+- (void)scrollSelectedToVisible { [self scrollIndexToVisible:self.selectedIndex]; }
+
+- (void)scrollIndexToVisible:(NSInteger)index {
+    NSRect frame = [self contentFrameAtIndex:index];
     BOOL vertical = self.orientation == OCTabsVertical;
     CGFloat start = vertical ? NSMinY(frame) : NSMinX(frame), end = vertical ? NSMaxY(frame) : NSMaxX(frame);
     CGFloat viewport = [self viewportLength];
     if (start < self.offset) self.offset = start;
     else if (end > self.offset + viewport) self.offset = end - viewport;
     [self clampOffset];
+    [self layoutEditor];
     self.needsDisplay = YES;
 }
 
 - (NSInteger)itemAtPoint:(NSPoint)point {
-    for (NSInteger i = 0; i <= self.tabCount; i++) {
+    for (NSInteger i = 0; i <= self.plusIndex; i++) {
         if (NSPointInRect(point, [self frameAtIndex:i])) return i;
     }
     return -1;
@@ -164,9 +191,10 @@ static const CGFloat AddWidth = 34;
         [[NSColor.separatorColor colorWithAlphaComponent:contrast ? 1 : 0.6] setFill];
         NSRectFill(NSMakeRect(NSWidth(self.bounds)-1, 0, 1, NSHeight(self.bounds)));
     }
+    NSInteger editing = self.editingIndex;
     for (NSInteger i = 0; i < self.tabCount; i++) {
         NSRect frame = [self frameAtIndex:i];
-        if (!NSIntersectsRect(frame, dirtyRect)) continue;
+        if (!NSIntersectsRect(frame, dirtyRect) || i == editing) continue;
         BOOL active = i == selected;
         NSRect pill = vertical ? NSInsetRect(frame, 4, 2) : frame;
         if (active) {
@@ -202,7 +230,18 @@ static const CGFloat AddWidth = 34;
                 NSParagraphStyleAttributeName:style}];
     }
 
-    NSRect add = [self frameAtIndex:self.tabCount];
+    if (editing >= 0) {
+        NSRect frame = [self frameAtIndex:editing];
+        NSRect pill = NSInsetRect(vertical ? NSInsetRect(frame, 4, 2) : frame, 0.75, 0.75);
+        NSBezierPath *shape = [NSBezierPath bezierPathWithRoundedRect:pill xRadius:9 yRadius:9];
+        [[NSColor.labelColor colorWithAlphaComponent:contrast ? 0.22 : 0.12] setFill];
+        [shape fill];
+        [NSColor.controlAccentColor setStroke];
+        shape.lineWidth = 1.5;
+        [shape stroke];
+    }
+
+    NSRect add = [self frameAtIndex:self.plusIndex];
     if (NSIntersectsRect(add, dirtyRect)) {
         NSImage *plus = [NSImage imageWithSystemSymbolName:@"plus" accessibilityDescription:nil];
         NSImage *symbol = [plus imageWithSymbolConfiguration:[NSImageSymbolConfiguration
@@ -222,13 +261,14 @@ static const CGFloat AddWidth = 34;
     NSInteger index = [self itemAtPoint:[self convertPoint:event.locationInWindow fromView:nil]];
     if (index < 0) return;
     [self.window makeFirstResponder:self];
-    if (index == self.tabCount) { if (self.onAdd) self.onAdd(); return; }
+    if (index == self.plusIndex) { if (self.onAdd) self.onAdd(); return; }
+    if (index == self.editingIndex) return;
     if (self.onSelect) self.onSelect([self collectionIDAtIndex:index]);
 }
 
 - (NSMenu *)menuForEvent:(NSEvent *)event {
     NSInteger index = [self itemAtPoint:[self convertPoint:event.locationInWindow fromView:nil]];
-    if (index <= 0 || index >= self.tabCount || !self.onContext) return nil;
+    if (index <= 0 || index >= self.tabCount || index == self.editingIndex || !self.onContext) return nil;
     return self.onContext([self collectionIDAtIndex:index]);
 }
 
@@ -238,7 +278,80 @@ static const CGFloat AddWidth = 34;
     CGFloat delta = self.orientation == OCTabsVertical ? dy : (fabs(dx) > fabs(dy) ? dx : dy);
     self.offset -= delta;
     [self clampOffset];
+    [self layoutEditor];
     self.needsDisplay = YES;
+}
+
+#pragma mark Inline editing
+
+- (void)layoutEditor {
+    NSInteger index = self.editingIndex;
+    if (!self.editor || index < 0) return;
+    BOOL vertical = self.orientation == OCTabsVertical;
+    NSRect frame = [self frameAtIndex:index];
+    NSRect pill = vertical ? NSInsetRect(frame, 4, 2) : frame;
+    CGFloat inset = vertical ? 10 : PillPadding;
+    self.editor.frame = NSMakeRect(NSMinX(pill)+inset, NSMidY(pill)-9, MAX(20,NSWidth(pill)-2*inset), 18);
+}
+
+- (void)beginEditingCollectionID:(int64_t)collectionID {
+    if (self.editor) [self endEditingCommit:NO];
+    NSString *initial = @"";
+    if (collectionID) {
+        initial = nil;
+        for (NSDictionary *collection in self.collections) {
+            if ([collection[@"id"] longLongValue] == collectionID) initial = collection[@"name"] ?: @"";
+        }
+        if (!initial) return;
+    }
+    self.editingID = collectionID;
+    self.editingInitial = initial;
+    NSTextField *field = [OCEditableTextField textFieldWithString:initial];
+    field.placeholderString = self.orientation == OCTabsVertical ? @"Nama baru" : @"Nama koleksi";
+    field.font = self.font;
+    field.bordered = NO;
+    field.drawsBackground = NO;
+    field.focusRingType = NSFocusRingTypeNone;
+    field.lineBreakMode = NSLineBreakByTruncatingTail;
+    field.usesSingleLineMode = YES;
+    field.delegate = self;
+    [field setAccessibilityLabel:collectionID ? @"Ubah nama koleksi" : @"Nama koleksi baru"];
+    self.editor = field;
+    [self addSubview:field];
+    [self scrollIndexToVisible:self.editingIndex];
+    [self.window makeFirstResponder:field];
+    [field selectText:nil];
+    self.needsDisplay = YES;
+}
+
+- (void)cancelEditing { [self endEditingCommit:NO]; }
+
+- (void)endEditingCommit:(BOOL)commit {
+    NSTextField *field = self.editor;
+    if (!field) return;
+    NSString *name = [field.stringValue stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    int64_t identifier = self.editingID;
+    BOOL changed = name.length && ![name isEqualToString:self.editingInitial];
+    self.editor = nil;
+    field.delegate = nil;
+    if (field.window.firstResponder == field.currentEditor || field.window.firstResponder == field)
+        [self.window makeFirstResponder:self];
+    [field removeFromSuperview];
+    [self clampOffset];
+    self.needsDisplay = YES;
+    if (commit && changed && self.onCommit) self.onCommit(identifier,name);
+    if (self.onEndEditing) self.onEndEditing();
+}
+
+- (BOOL)control:(NSControl *)control textView:(NSTextView *)textView doCommandBySelector:(SEL)selector {
+    if (control != self.editor) return NO;
+    if (selector == @selector(insertNewline:)) { [self endEditingCommit:YES]; return YES; }
+    if (selector == @selector(cancelOperation:)) { [self endEditingCommit:NO]; return YES; }
+    return NO;
+}
+
+- (void)controlTextDidEndEditing:(NSNotification *)notification {
+    if (notification.object == self.editor) [self endEditingCommit:NO];
 }
 
 #pragma mark Accessibility
@@ -252,7 +365,8 @@ static const CGFloat AddWidth = 34;
     __weak OCTabs *weakSelf = self;
     for (NSInteger i = 0; i <= self.tabCount; i++) {
         BOOL add = i == self.tabCount;
-        NSRect screen = [self.window convertRectToScreen:[self convertRect:[self frameAtIndex:i] toView:nil]];
+        NSRect screen = [self.window convertRectToScreen:[self convertRect:[self frameAtIndex:add ? self.plusIndex : i]
+                                                                    toView:nil]];
         OCTabElement *element = [OCTabElement accessibilityElementWithRole:NSAccessibilityRadioButtonRole
             frame:screen label:add ? @"Tambah koleksi" : i == 0 ? @"Riwayat"
                 : [NSString stringWithFormat:@"Koleksi %@",[self titleAtIndex:i]] parent:self];
