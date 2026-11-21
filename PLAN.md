@@ -44,7 +44,7 @@ Target pengujian pertama adalah Mac Apple Silicon dengan macOS 27.2.1. Bundle `.
 ### Panel bawah layar
 
 - Rentangkan panel Liquid Glass selebar monitor tempat pointer berada, dengan jarak vertikal dari Dock. Material native mengambil warna dan memburamkan jendela di belakang, sementara tepi kaca memakai gaya Clear. Saat pengurangan transparansi aktif, gunakan latar padat.
-- Bilah atas memuat pencarian, tombol **Koleksi** di sampingnya, dan menu **⋯**. Tombol **Koleksi** membuka daftar yang bisa dicari. Pilih nama koleksi untuk menampilkan isinya dalam panel yang sama.
+- Bilah atas memuat pencarian, strip tab, dan menu **⋯**. Strip berisi tab **Riwayat**, satu tab per koleksi (titik warna dan nama, terpotong dengan elipsis), dan tombol **+**. Memilih tab langsung menampilkan klipnya di panel yang sama; strip bisa digulir dan tab aktif selalu terlihat.
 - Isi kartu menyesuaikan jenis klip, misalnya pratinjau gambar, cuplikan teks, atau swatch warna. Tampilkan jenis dan waktu salin sebagai metadata ringkas. Kartu terpilih memakai indikator warna aksen sistem dan otomatis masuk ke area terlihat saat pengguna berpindah dengan keyboard.
 - Roda mouse biasa dan gestur horizontal trackpad dapat menggulir deretan kartu. Saat panel terbuka, `←` dan `→` langsung berpindah kartu. Bila pencarian memiliki fokus dan berisi teks, tekan `Tab` untuk kembali memfokuskan deretan kartu.
 
@@ -52,13 +52,13 @@ Target pengujian pertama adalah Mac Apple Silicon dengan macOS 27.2.1. Bundle `.
 
 Kedua tampilan memakai riwayat, koleksi, status sematan, dan aturan privasi yang sama. Menu **⋯** memberi akses ke **Pengaturan…**, **Keluar**, dan **Panduan Accessibility…** saat izin diperlukan.
 
-Gunakan **+** di daftar Koleksi untuk menambahkan koleksi. Untuk koleksi yang dipilih, menu **⋯** dan klik kanan menyediakan **Ubah nama…** dan **Hapus koleksi…**. Penghapusan koleksi menghapus keanggotaannya saja, sehingga klip tetap ada di Riwayat dan koleksi lain. Dari Riwayat, gunakan **Tambahkan ke koleksi** untuk menaruh klip ke satu atau beberapa koleksi. Klip bisa dikeluarkan dari koleksi tanpa menghapus riwayatnya.
+Gunakan **+** di strip atau rail tab untuk menambahkan koleksi; koleksi baru langsung menjadi tab aktif. Klik kanan sebuah tab, atau menu **⋯** saat tab koleksi aktif, menyediakan **Ubah nama…** dan **Hapus koleksi…**. Penghapusan koleksi menghapus keanggotaannya saja, sehingga klip tetap ada di Riwayat dan koleksi lain; bila tab aktif dihapus, tampilan kembali ke Riwayat. Dari Riwayat, gunakan **Tambahkan ke koleksi** untuk menaruh klip ke satu atau beberapa koleksi. Klip bisa dikeluarkan dari koleksi tanpa menghapus riwayatnya.
 
-Di popup dekat kursor teks, tampilan **Koleksi** menampilkan daftar koleksi bernama. Buka maksimal satu submenu sekaligus, sejajar dengan baris koleksi aktif. Submenu muncul ke kanan dan berpindah ke kiri kalau ruang di kanan kurang. Kalau kedua sisi terlalu sempit, tampilkan isi koleksi di panel utama dengan jalur kembali. Grup koleksi tetap di posisi yang sama ketika submenu ditutup.
+Di popup dekat kursor teks, tab ditampilkan sebagai rail vertikal di kiri daftar klip (112 px, atau 96 px bila panel sempit). Popup selebar 520 px bila layar cukup, selain itu 432 px. Rail memakai isi dan perilaku yang sama dengan strip di panel bawah.
 
 Pencarian berlaku pada tampilan aktif. Saat panel dibuka atau kueri maupun tampilan berubah, pilih hasil pertama jika tersedia. Jika ada pembaruan riwayat saat panel terbuka, pertahankan pilihan berdasarkan ID klip selama klip tersebut masih tampil. Tampilkan keadaan kosong saat riwayat atau koleksi kosong, dan keadaan tanpa hasil saat pencarian tidak cocok.
 
-Saat panel dibuka, fokus dimulai di hasil dan klip pertama terpilih jika tersedia. Ketikan langsung memfokuskan pencarian dan menambahkan karakter pertama ke kueri. `Tab` berputar antara pencarian, hasil yang tersedia, tombol Koleksi atau Kembali, dan menu tindakan. Saat pengguna mengetik, tombol arah horizontal menggerakkan caret.
+Saat panel dibuka, fokus dimulai di hasil dan klip pertama terpilih jika tersedia. Ketikan langsung memfokuskan pencarian dan menambahkan karakter pertama ke kueri. `Tab` berputar antara pencarian, hasil yang tersedia, strip atau rail tab, dan menu tindakan. Saat pengguna mengetik, tombol arah horizontal menggerakkan caret.
 
 | Tombol | Perilaku |
 | --- | --- |
@@ -67,15 +67,16 @@ Saat panel dibuka, fokus dimulai di hasil dan klip pertama terpilih jika tersedi
 | `⇧↑` / `⇧↓` atau Shift+klik | Pilih klip di antara titik awal dan posisi terakhir, termasuk kedua ujung rentang. |
 | `⌘` + klik | Tambahkan atau lepas klip satu per satu, termasuk klip yang letaknya berjauhan. |
 | `⌥←` / `⌥→` | Di panel bawah, lompat ke klip pertama pada hari sebelumnya atau berikutnya. |
-| `⌘1` / `⌘2` | Buka Riwayat atau daftar Koleksi. |
-| `⌘→` / `⌘←` | Di panel bawah, maju dari Riwayat ke daftar Koleksi lalu ke koleksi terpilih, atau kembali satu tingkat. |
+| `⌘1`…`⌘9` | Lompat ke tab ke-n (1 = Riwayat). Tidak melakukan apa-apa bila tab itu tidak ada. |
+| `⌘←` / `⌘→` | Di panel bawah, pindah ke tab sebelumnya atau berikutnya (tanpa wrap). Di popup berfungsi sebagai alias `⌘↑` / `⌘↓`. |
+| `⌘↑` / `⌘↓` | Di popup, pindah ke tab sebelumnya atau berikutnya (tanpa wrap). Di panel bawah berfungsi sebagai alias `⌘←` / `⌘→`. |
 | `Delete` / `⌫` | Hapus klip terpilih saat hasil memiliki fokus. Di kolom pencarian, tombol ini menghapus teks. |
 | **Urungkan** / `⌘Z` | Pulihkan penghapusan klip terakhir dalam 10 detik. Pintasan berlaku saat hasil memiliki fokus. |
-| `→` | Di popup dekat kursor, buka daftar Koleksi dari akhir kueri atau hasil Riwayat, dan buka koleksi terpilih dari daftar Koleksi. Di panel bawah, pilih kartu berikutnya saat pencarian kosong atau fokus ada di kartu. |
-| `←` | Di submenu popup, kembali ke koleksi yang tadi dipilih, termasuk saat submenu digambar ke kiri. Di panel bawah, pilih kartu sebelumnya saat pencarian kosong atau fokus ada di kartu. |
-| `Enter` atau klik ganda klip | Tempel klip terpilih langsung ke aplikasi asal atau buka koleksi terpilih. Saat fokus pada kontrol, `Enter` menjalankan aksi kontrol tersebut. |
+| `→` | Di panel bawah, pilih kartu berikutnya saat pencarian kosong atau fokus ada di kartu. Di popup hanya menggerakkan caret di pencarian. |
+| `←` | Di panel bawah, pilih kartu sebelumnya saat pencarian kosong atau fokus ada di kartu. Di popup hanya menggerakkan caret di pencarian. |
+| `Enter` atau klik ganda klip | Tempel klip terpilih langsung ke aplikasi asal. Saat fokus pada kontrol, `Enter` menjalankan aksi kontrol tersebut. |
 | `Spasi` | Buka atau tutup pratinjau klip. Pintasan berlaku saat hasil menerima fokus atau pencarian masih kosong. Spasi tetap bisa dipakai untuk mengetik kueri beberapa kata. |
-| `Esc` | Tutup pratinjau, kembali dari isi koleksi ke daftar koleksi, atau tutup panel. |
+| `Esc` | Tutup pratinjau, atau tutup panel. |
 
 Simpan aplikasi asal saat shortcut dipicu. Setelah klip disiapkan di clipboard, tutup panel dan kirim pintasan tempel ke proses asal setelah fokus kembali. Batalkan pengiriman jika fokus atau isi clipboard berubah. `Esc` memulihkan fokus, sedangkan klik di luar atau pindah aplikasi mengikuti fokus yang dipilih pengguna.
 
@@ -168,7 +169,7 @@ Jalankan `cargo fmt --check` dan `cargo test --locked` setelah proyek Cargo ters
 ### 5. Pencarian, koleksi, dan pengelolaan riwayat
 
 - [x] Hubungkan kedua tampilan ke riwayat yang sama. Kerjakan pencarian, filter, sematan, dan pilihan berbasis ID. Uji `Enter` dari pencarian, urutan `Tab` dan `⇧Tab`, serta gulir horizontal di deretan kartu.
-- [x] Implementasikan pembuatan koleksi dan keanggotaan banyak koleksi. Uji submenu popup di kedua sisi layar, fallback saat ruang sempit, navigasi tab panel bawah, dan pengembalian fokus. Cakup koleksi kosong dan koleksi panjang.
+- [x] Implementasikan pembuatan koleksi dan keanggotaan banyak koleksi. Uji rail tab di popup, strip tab di panel bawah, lebar popup saat layar sempit, dan pengembalian fokus. Cakup koleksi kosong dan koleksi panjang.
 - [x] Lengkapi pengaturan **Riwayat**, pemakaian penyimpanan, dan alur konfirmasi hapus. Uji sematan, klip di beberapa koleksi, hapus riwayat biasa, hapus klip global, serta hapus semua klip. Uji kembali pemangkasan setelah klip disematkan atau dimasukkan ke koleksi.
 
 **Lulus saat** riwayat dan koleksi bisa dicari, ditelusuri, dan dipakai dari kedua tampilan dengan keyboard. Bersihkan riwayat mempertahankan klip yang dilindungi, dan hapus semua mengosongkan isi koleksi.
@@ -201,6 +202,6 @@ Pengukuran latar belakang selama 300,02 detik memakai pasteboard uji yang stabil
 - `cargo fmt --check`, enam tes `cargo test --locked`, dan `cargo clippy --locked -- -D warnings` lulus. Tes mencakup klasifikasi, deduplikasi, perlindungan anggota koleksi saat pemangkasan, penyisihan data sensitif dari database, dan penghapusan payload saat klip diubah menjadi sensitif.
 - Shortcut bawaan dan `Esc` diuji dari TextEdit, Safari, Chrome, dan VS Code. Shortcut pengganti benar-benar membuka panel, pilihan shortcut dan tampilan tersimpan setelah aplikasi dibuka kembali, lalu keduanya dikembalikan ke bawaan.
 - Dengan pasteboard uji terpisah, jalur runtime lulus untuk baseline saat mulai, teks dengan spasi dan baris baru, JSON, PNG, beberapa item dan tipe dalam satu salinan, marker rahasia pada item kedua, penyisihan pola sensitif, aplikasi depan yang dikecualikan, dan penanda sumber aplikasi yang dikecualikan. Klip terpilih dikembalikan dengan `Enter` dan fokus kembali ke aplikasi asal.
-- Menu klip bisa dibuka dengan keyboard. Sematan dan penambahan klip ke koleksi berhasil di jendela uji, lalu klip tersebut muncul saat koleksi dibuka di panel samping.
+- Menu klip bisa dibuka dengan keyboard. Sematan dan penambahan klip ke koleksi berhasil di jendela uji, lalu klip tersebut muncul saat tab koleksinya dibuka.
 - Pendaftaran dan pencabutan opsi **Jalankan saat login** berhasil. Opsi kembali nonaktif setelah uji.
 - Posisi caret teruji pada satu layar dengan kolom teks native satu baris, beberapa baris, kolom kosong, dan baris baru. Pengujian layar kedua, login ulang, serta persistensi izin lintas build masih diperlukan. Keychain belum memiliki identitas penandatanganan valid untuk pengujian yang terakhir.
