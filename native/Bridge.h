@@ -32,4 +32,9 @@ void oc_preview_image(uint64_t ticket, int64_t id, const uint8_t *data, size_t l
 OCThumbnail oc_thumbnail(const uint8_t *data, size_t length);
 void oc_free_thumbnail(uint8_t *data);
 
+// Collection tabs: index 0 is the history tab, 1... are collections (count includes history).
+int64_t oc_tab_step(int64_t current, int64_t count, int64_t delta);
+int64_t oc_tab_for_digit(int64_t digit, int64_t count);
+double oc_tab_hue(int64_t id);
+
 #endif

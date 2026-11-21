@@ -1,6 +1,7 @@
 mod clip;
 mod history;
 mod shortcut;
+mod tabs;
 mod worker;
 
 use objc2::MainThreadMarker;
