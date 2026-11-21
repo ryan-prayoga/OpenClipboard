@@ -57,6 +57,10 @@ fn main() {
         .flag(format!("-mmacosx-version-min={MACOS_VERSION}"))
         .compile("openclipboard_app");
     println!("cargo:rustc-link-lib=static=openclipboard_permissions");
+    // Unoptimized Swift objects autolink libswift_Concurrency through @rpath
+    // (release builds use the absolute /usr/lib/swift path), so debug and test
+    // binaries need the system Swift runtime directory as an rpath.
+    println!("cargo:rustc-link-arg=-Wl,-rpath,/usr/lib/swift");
     for framework in [
         "AppKit",
         "ApplicationServices",
