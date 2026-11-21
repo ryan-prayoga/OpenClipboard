@@ -10,13 +10,13 @@ static CGFloat const RowInset = 5;
 
 static NSString *KindLabel(NSString *kind) {
     return @{@"teks":@"Teks", @"url":@"Tautan", @"json":@"JSON", @"kode":@"Kode",
-        @"warna":@"Warna", @"gambar":@"Gambar", @"sensitif":@"Sensitif"}[kind] ?: @"Koleksi";
+        @"warna":@"Warna", @"gambar":@"Gambar", @"sensitif":@"Sensitif"}[kind] ?: @"Teks";
 }
 
 static NSString *KindIcon(NSString *kind) {
     return @{@"teks":@"text.alignleft", @"url":@"link", @"json":@"curlybraces",
         @"kode":@"chevron.left.forwardslash.chevron.right", @"warna":@"paintpalette",
-        @"gambar":@"photo", @"sensitif":@"eye.slash"}[kind] ?: @"folder";
+        @"gambar":@"photo", @"sensitif":@"eye.slash"}[kind] ?: @"text.alignleft";
 }
 
 static NSDictionary *TextAttributes(NSFont *font, NSColor *color) {
@@ -248,7 +248,7 @@ static NSColor *Swatch(NSString *hex) {
 
 - (void)extendSelectionTo:(NSInteger)index {
     if (index < 0 || (NSUInteger)index >= self.rows.count) return;
-    if (self.collections || self.selectionAnchor < 0) {
+    if (self.selectionAnchor < 0) {
         self.selected = index;
         return;
     }
@@ -259,7 +259,7 @@ static NSColor *Swatch(NSString *hex) {
 }
 
 - (void)toggleSelectionAt:(NSInteger)index {
-    if (index < 0 || (NSUInteger)index >= self.rows.count || self.collections) return;
+    if (index < 0 || (NSUInteger)index >= self.rows.count) return;
     NSUInteger position = (NSUInteger)index;
     NSMutableIndexSet *indexes = [self.selectedIndexes mutableCopy];
     if (![indexes containsIndex:position]) {
@@ -329,7 +329,7 @@ static NSColor *Swatch(NSString *hex) {
 }
 
 - (void)drawEntry:(NSDictionary *)entry rect:(NSRect)rect selected:(BOOL)selected lead:(BOOL)lead {
-    NSString *kind = entry[@"kind"] ?: @"koleksi";
+    NSString *kind = entry[@"kind"] ?: @"teks";
     NSString *title = [entry[@"title"] length] ? entry[@"title"] : @"(Teks kosong)";
     NSImage *thumbnail = self.images[entry[@"id"]];
     NSColor *tint = KindColor(kind);
@@ -380,12 +380,6 @@ static NSColor *Swatch(NSString *hex) {
         if (!swatch) DrawImage(SymbolTinted(KindIcon(kind),tint), NSInsetRect(tile,7,7));
     }
 
-    if (self.collections) {
-        DrawText(title, NSMakeRect(left+39,center-9,MAX(0,right-left-62),20), 13.5,
-                 NSFontWeightSemibold, NSColor.labelColor);
-        DrawImage(Symbol(@"chevron.right"),NSMakeRect(right-11,center-6,11,12));
-        return;
-    }
     DrawText(imageKind ? @"Gambar" : title,NSMakeRect(left+39,center-16,MAX(0,right-left-95),18),13,
              NSFontWeightSemibold,NSColor.labelColor);
     NSString *detail = imageSize ?: (host.length ? host : sensitive ? @"Spasi untuk membuka" : KindLabel(kind));
@@ -412,14 +406,6 @@ static NSColor *Swatch(NSString *hex) {
     DrawImage(SymbolTinted(KindIcon(kind),tint),NSInsetRect(tile,6,6));
     DrawText(KindLabel(kind),NSMakeRect(left+35,top+15,right-left-57,18),12,
              NSFontWeightSemibold,NSColor.labelColor);
-    if (self.collections) {
-        DrawMultiline(title,NSMakeRect(left+4,top+60,right-left-8,76),
-            [NSFont systemFontOfSize:20 weight:NSFontWeightSemibold],NSColor.labelColor);
-        DrawText(@"Buka koleksi",NSMakeRect(left+4,top+178,right-left-33,18),11,
-            NSFontWeightMedium,Secondary());
-        DrawImage(Symbol(@"chevron.right"),NSMakeRect(right-12,top+181,10,12));
-        return;
-    }
     if (pinned) DrawImage(Symbol(@"pin"),NSMakeRect(right-13,top+16,13,13));
 
     NSRect body = NSMakeRect(left,top+46,right-left,PreviewHeight);
@@ -504,8 +490,8 @@ static NSColor *Swatch(NSString *hex) {
     }
 
     NSNumber *identifier = self.rows[(NSUInteger)index][@"id"];
-    BOOL extend = !self.collections && (event.modifierFlags & NSEventModifierFlagShift) != 0;
-    BOOL toggle = !self.collections && (event.modifierFlags & NSEventModifierFlagCommand) != 0;
+    BOOL extend = (event.modifierFlags & NSEventModifierFlagShift) != 0;
+    BOOL toggle = (event.modifierFlags & NSEventModifierFlagCommand) != 0;
     NSTimeInterval now = NSProcessInfo.processInfo.systemUptime;
     // A nonactivating panel can receive both mouse-downs without a combined click count.
     BOOL sameClip = [identifier isEqual:self.lastClickID];
@@ -515,7 +501,7 @@ static NSColor *Swatch(NSString *hex) {
     OCResultAction action = OCResultSelect;
     if (extend) action = OCResultExtendSelection;
     else if (toggle) action = OCResultToggleSelection;
-    else if (self.collections || repeated || (sameClip && event.clickCount == 2)) action = OCResultConfirm;
+    else if (repeated || (sameClip && event.clickCount == 2)) action = OCResultConfirm;
     self.lastClickID = action == OCResultSelect ? identifier : nil;
     self.lastClickAt = now;
     self.lastClickPoint = point;
@@ -546,7 +532,7 @@ static NSColor *Swatch(NSString *hex) {
         BOOL sensitive = [entry[@"sensitive"] boolValue];
         NSString *title = sensitive ? @"Item sensitif" : entry[@"title"];
         NSString *label = title.length ? title : @"Teks kosong";
-        if (!self.collections && !sensitive) {
+        if (!sensitive) {
             // Kind, pin state, and time are shown visually, so VoiceOver gets them too.
             label = [NSString stringWithFormat:@"%@, %@%@, %@", label, KindLabel(entry[@"kind"]),
                 [entry[@"pinned"] boolValue] ? @", disematkan" : @"", ActivityTime(entry[@"last_used"])];

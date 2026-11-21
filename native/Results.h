@@ -9,7 +9,6 @@ typedef NS_ENUM(NSUInteger, OCResultAction) {
 
 @interface OCResults : NSView
 @property(nonatomic) BOOL horizontal;
-@property(nonatomic) BOOL collections;
 @property(nonatomic, copy) NSArray<NSDictionary *> *rows;
 @property(nonatomic, strong) NSMutableDictionary<NSNumber *, NSImage *> *images;
 @property(nonatomic) NSInteger selected;

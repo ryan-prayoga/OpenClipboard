@@ -1,6 +1,7 @@
 #import "Native.h"
 #import "AccessibilityGuide.h"
 #import "Results.h"
+#import "Tabs.h"
 #import "Toolbar.h"
 #import <ApplicationServices/ApplicationServices.h>
 #import <Carbon/Carbon.h>
@@ -178,27 +179,17 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
 
 @interface OCPicker () <NSSearchFieldDelegate, NSPopoverDelegate>
 @property(nonatomic, strong) NSPanel *panel;
-@property(nonatomic, strong) NSPanel *side;
 @property(nonatomic, strong) NSRunningApplication *origin;
 @property(nonatomic, strong) NSSearchField *search;
-@property(nonatomic, strong) NSSearchField *sideSearch;
-@property(nonatomic, strong) NSButton *navigation;
 @property(nonatomic, strong) NSButton *action;
-@property(nonatomic, strong) NSButton *addCollection;
-@property(nonatomic, strong) NSButton *backButton;
 @property(nonatomic, strong) NSTextField *status;
-@property(nonatomic, strong) NSTextField *sideStatus;
 @property(nonatomic, strong) NSTextField *shortcutHints;
 @property(nonatomic, strong) NSButton *undoButton;
-@property(nonatomic, strong) NSButton *sideUndoButton;
 @property(nonatomic) uint64_t undoTicket;
 @property(nonatomic) BOOL undoPending;
 @property(nonatomic, copy) NSString *undoMessage;
-@property(nonatomic, copy) NSString *collectionName;
 @property(nonatomic, strong) OCResults *results;
-@property(nonatomic, strong) OCResults *sideResults;
 @property(nonatomic, strong) NSScrollView *scroll;
-@property(nonatomic, strong) NSScrollView *sideScroll;
 @property(nonatomic, strong) NSPopover *preview;
 @property(nonatomic, strong) id keyMonitor;
 @property(nonatomic, strong) id mouseMonitor;
@@ -206,16 +197,14 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
 @property(nonatomic, strong) id resignObserver;
 @property(nonatomic, strong) id workspaceObserver;
 @property(nonatomic, strong) id scrollObserver;
-@property(nonatomic, strong) id sideScrollObserver;
 @property(nonatomic, copy) NSArray<NSDictionary *> *collections;
 @property(nonatomic, copy) NSArray<NSDictionary *> *clips;
 @property(nonatomic, strong) NSMutableDictionary<NSNumber *, NSImage *> *images;
 @property(nonatomic, strong) NSMutableSet<NSNumber *> *requested;
 @property(nonatomic) BOOL bottom;
-@property(nonatomic) BOOL browsing;
-@property(nonatomic) BOOL inlineCollection;
-@property(nonatomic) int64_t collection;
-@property(nonatomic) NSInteger collectionRow;
+@property(nonatomic, strong) OCTabs *tabs;
+@property(nonatomic) int64_t activeTab;
+@property(nonatomic) BOOL revealTab;
 @property(nonatomic) uint64_t catalogTicket;
 @property(nonatomic) NSTimeInterval searchStarted;
 @property(nonatomic) uint64_t payloadTicket;
@@ -253,11 +242,8 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
     }
     self.panelToken++;
     self.bottom = bottom;
-    self.browsing = NO;
-    self.inlineCollection = NO;
-    self.collection = 0;
-    self.collectionName = nil;
-    self.collectionRow = -1;
+    self.activeTab = 0;
+    self.revealTab = NO;
     self.clips = @[];
     self.revealed = 0;
     self.payloadMode = OCIdle;
@@ -276,7 +262,7 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
         room.origin.x = NSMinX(screen.frame);
         room.size.width = NSWidth(screen.frame);
     }
-    CGFloat width = bottom ? NSWidth(room) : MIN(432, NSWidth(room));
+    CGFloat width = bottom ? NSWidth(room) : NSWidth(room) >= 520 ? 520 : MIN(432, NSWidth(room));
     CGFloat targetHeight = bottom ? (width >= 710 ? 328 : 372) : 380;
     CGFloat height = MIN(targetHeight, room.size.height);
     CGFloat x = NSMinX(room);
@@ -307,18 +293,41 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
     CGFloat control = OCToolbarHeight, gap = 8;
     CGFloat barY = h - edge - control;
     CGFloat buttonX = w - edge - control;
-    self.search = [self makeSearch:NSMakeRect(edge,barY,160,control) view:view];
-    self.action = OCToolbarIcon(NSMakeRect(buttonX,barY,control,control), view,
-        @"ellipsis", @"Tindakan", self, @selector(actions:));
-    self.addCollection = OCToolbarIcon(NSMakeRect(buttonX-gap-control,barY,control,control), view,
-        @"plus", @"Tambah koleksi", self, @selector(createCollection:));
-    [self makeNavigationInView:view frame:NSMakeRect(edge,barY,95,control)];
-
     CGFloat footerY = self.bottom ? 15 : 11;
     CGFloat resultsBottom = footerY + 25;
     CGFloat resultsTop = barY - 10;
-    self.scroll = [self makeScroll:NSMakeRect(edge-2,resultsBottom,w-2*(edge-2),
-        MAX(35,resultsTop-resultsBottom)) inView:view horizontal:self.bottom];
+    CGFloat resultsHeight = MAX(35,resultsTop-resultsBottom);
+    __weak OCPicker *weakSelf = self;
+
+    self.action = OCToolbarIcon(NSMakeRect(buttonX,barY,control,control), view,
+        @"ellipsis", @"Tindakan", self, @selector(actions:));
+    CGFloat railWidth = 0;
+    if (self.bottom) {
+        CGFloat searchWidth = MAX(120,MIN(260,(buttonX-gap-edge)*0.4));
+        self.search = [self makeSearch:NSMakeRect(edge,barY,searchWidth,control) view:view];
+        CGFloat tabsX = edge + searchWidth + gap;
+        self.tabs = [[OCTabs alloc] initWithFrame:NSMakeRect(tabsX,barY,MAX(60,buttonX-gap-tabsX),control)
+            orientation:OCTabsHorizontal];
+    } else {
+        self.search = [self makeSearch:NSMakeRect(edge,barY,buttonX-gap-edge,control) view:view];
+        railWidth = w >= 500 ? 112 : 96;
+        self.tabs = [[OCTabs alloc] initWithFrame:NSMakeRect(edge-2,resultsBottom,railWidth,resultsHeight)
+            orientation:OCTabsVertical];
+    }
+    [view addSubview:self.tabs];
+    self.tabs.collections = self.collections;
+    self.tabs.selectedID = self.activeTab;
+    self.tabs.onSelect = ^(int64_t identifier) { [weakSelf selectTab:identifier]; };
+    self.tabs.onAdd = ^{ [weakSelf createCollection:nil]; };
+    self.tabs.onContext = ^NSMenu *(int64_t identifier) {
+        OCPicker *picker = weakSelf;
+        NSDictionary *row = [picker collectionRowForID:identifier];
+        return row ? [picker contextFor:row] : nil;
+    };
+
+    CGFloat scrollInset = railWidth ? railWidth + 6 : 0;
+    self.scroll = [self makeScroll:NSMakeRect(edge-2+scrollInset,resultsBottom,w-2*(edge-2)-scrollInset,
+        resultsHeight) inView:view horizontal:self.bottom];
     self.results = (OCResults *)self.scroll.documentView;
 
     CGFloat hintsWidth = w >= 370 ? 226 : 0;
@@ -341,7 +350,6 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
     self.undoButton = [self makeUndoButtonIn:view right:w-edge y:footerY-4];
     [self refreshUndoControls];
     [self setMessage:self.recordingStatus];
-    __weak OCPicker *weakSelf = self;
     self.results.picked = ^(NSInteger index, OCResultAction action) {
         [weakSelf pick:index in:weakSelf.results action:action];
     };
@@ -420,20 +428,15 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
     return scroll;
 }
 
-- (OCResults *)activeResults { return self.side ? self.sideResults : self.results; }
-- (NSSearchField *)activeSearch { return self.side ? self.sideSearch : self.search; }
-- (NSPanel *)activePanel { return self.side ?: self.panel; }
+- (OCResults *)activeResults { return self.results; }
+- (NSSearchField *)activeSearch { return self.search; }
+- (NSPanel *)activePanel { return self.panel; }
 
 - (id)observeScroll:(NSScrollView *)scroll {
     scroll.contentView.postsBoundsChangedNotifications = YES;
     __weak OCPicker *weakSelf = self;
     return [NSNotificationCenter.defaultCenter addObserverForName:NSViewBoundsDidChangeNotification
         object:scroll.contentView queue:nil usingBlock:^(__unused NSNotification *note) { [weakSelf loadVisibleImages]; }];
-}
-
-- (void)removeSideScrollObserver {
-    if (self.sideScrollObserver) [NSNotificationCenter.defaultCenter removeObserver:self.sideScrollObserver];
-    self.sideScrollObserver = nil;
 }
 
 - (void)installMonitors {
@@ -453,8 +456,7 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
             return event;
         }
         if (event.type != NSEventTypeLeftMouseDown && event.type != NSEventTypeLeftMouseUp) return event;
-        OCResults *results = event.window == picker.panel ? picker.results
-            : event.window == picker.side ? picker.sideResults : nil;
+        OCResults *results = event.window == picker.panel ? picker.results : nil;
         if (![results containsPickerClick:event]) return event;
         if (event.type == NSEventTypeLeftMouseDown) [results mouseDown:event];
         return nil;
@@ -487,21 +489,16 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
     self.resignObserver = nil;
     self.workspaceObserver = nil;
     self.scrollObserver = nil;
-    [self removeSideScrollObserver];
     [self clearPreview];
     NSRunningApplication *origin = self.origin;
-    [self.side orderOut:nil];
     [self.panel orderOut:nil];
-    self.side = nil;
-    self.backButton = nil;
+    self.tabs = nil;
     self.panel = nil;
     self.origin = nil;
     self.panelToken++;
     self.catalogTicket++;
     self.results = nil;
-    self.sideResults = nil;
     self.undoButton = nil;
-    self.sideUndoButton = nil;
     [self.images removeAllObjects];
     [self.requested removeAllObjects];
     if (restore && NSApp.isActive && origin && !origin.terminated &&
@@ -513,14 +510,10 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
 }
 
 - (void)fetchCatalog {
-    if (!self.panel || (self.browsing && !self.collection)) {
-        if (self.panel) OCSend(@{@"action":@"catalog", @"ticket":@(++self.catalogTicket),
-            @"query":@"", @"kind":@"", @"collection":@0});
-        return;
-    }
+    if (!self.panel) return;
     uint64_t ticket = self.catalogTicket + 1;
     if (OCSend(@{@"action":@"catalog", @"ticket":@(ticket),
-        @"query":self.activeSearch.stringValue ?: @"", @"kind":@"", @"collection":@(self.collection)})) {
+        @"query":self.search.stringValue ?: @"", @"kind":@"", @"collection":@(self.activeTab)})) {
         self.catalogTicket = ticket;
     } else {
         [self setWarning:@"Riwayat sedang sibuk. Coba lagi."];
@@ -530,10 +523,6 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
 - (void)controlTextDidChange:(NSNotification *)notification {
     if (notification.object != self.activeSearch) return;
     [(OCToolbarSearchField *)notification.object refreshClearButton];
-    if (self.browsing && !self.collection) {
-        [self renderCollections];
-        return;
-    }
     [self clearPreview];
     self.activeResults.selected = -1;
     self.searchStarted = NSProcessInfo.processInfo.systemUptime;
@@ -573,7 +562,8 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
         [self fetchCatalog];
     } else if ([kind isEqualToString:@"created"]) {
         [self setMessage:@"Koleksi dibuat."];
-        [self fetchCatalog];
+        if (event[@"id"]) [self selectTab:[event[@"id"] longLongValue]];
+        else [self fetchCatalog];
     } else if ([kind isEqualToString:@"error"]) {
         NSString *reason = event[@"reason"];
         self.payloadMode = OCIdle;
@@ -586,9 +576,15 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
         NSDictionary *catalog = event[@"catalog"];
         NSArray *nextCollections = catalog[@"collections"] ?: @[];
         self.collections = nextCollections;
-        if (self.browsing && !self.collection) {
-            [self renderCollections];
+        self.tabs.collections = nextCollections;
+        if (self.activeTab && ![self collectionRowForID:self.activeTab]) {
+            [self selectTab:0];
             return;
+        }
+        [self refreshTabState];
+        if (self.revealTab) {
+            self.revealTab = NO;
+            [self.tabs scrollSelectedToVisible];
         }
         self.clips = catalog[@"clips"] ?: @[];
         for (NSDictionary *clip in self.clips) {
@@ -599,9 +595,9 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
         }
         OCResults *result = self.activeResults;
         BOOL query = self.activeSearch.stringValue.length > 0;
-        NSString *title = query ? @"Tidak ada hasil" : self.collection ? @"Koleksi masih kosong" : @"Belum ada klip";
+        NSString *title = query ? @"Tidak ada hasil" : self.activeTab ? @"Koleksi masih kosong" : @"Belum ada klip";
         NSString *detail = nil;
-        if (!query && !self.collection) {
+        if (!query && !self.activeTab) {
             detail = self.shortcutLabel.length
                 ? [NSString stringWithFormat:@"Salin teks atau gambar, lalu tekan %@.",self.shortcutLabel]
                 : @"Salin teks atau gambar untuk mulai mengisi riwayat.";
@@ -633,87 +629,49 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
     if (results != self.results) return;
     NSUInteger count = results.selectedIndexes.count;
     self.shortcutHints.stringValue = !count ? @""
-        : results.collections ? @"↵ Buka koleksi"
         : count > 1 ? [NSString stringWithFormat:@"%lu dipilih    ↵ Tempel 1    ⌫ Hapus",(unsigned long)count]
         : self.activePanel.firstResponder == results ? @"Spasi Pratinjau    ↵ Tempel    ⌫ Hapus"
         : @"Spasi Pratinjau    ↵ Tempel";
 }
 
-- (void)makeNavigationInView:(NSView *)view frame:(NSRect)frame {
-    NSView *surface = OCToolbarSurface(frame,view);
-    self.navigation = [NSButton buttonWithTitle:@"" target:self action:@selector(toggleNavigation:)];
-    self.navigation.frame = surface.bounds;
-    self.navigation.bordered = NO;
-    self.navigation.font = [NSFont systemFontOfSize:12 weight:NSFontWeightSemibold];
-    [surface addSubview:self.navigation];
-    [self refreshNavigation];
+- (NSDictionary *)collectionRowForID:(int64_t)identifier {
+    for (NSDictionary *collection in self.collections) {
+        if ([collection[@"id"] longLongValue] == identifier)
+            return @{@"id":collection[@"id"],@"title":collection[@"name"] ?: @"",@"kind":@"koleksi"};
+    }
+    return nil;
 }
 
-- (void)refreshNavigation {
-    BOOL inCollection = self.collection != 0;
-    BOOL listing = self.browsing && !inCollection;
-    BOOL namedBack = inCollection && self.inlineCollection;
-    NSString *forwardTitle = self.bottom ? @"Koleksi  ⌘→" : @"Koleksi  →";
-    NSString *historyTitle = self.bottom ? @"⌘←  Riwayat" : @"Riwayat";
-    self.navigation.title = namedBack ? [NSString stringWithFormat:@"‹  %@",self.collectionName]
-        : inCollection ? @"Kembali" : self.browsing ? historyTitle : forwardTitle;
-    self.navigation.cell.lineBreakMode = NSLineBreakByTruncatingTail;
-    self.navigation.toolTip = namedBack ? [NSString stringWithFormat:@"Kembali dari %@",self.collectionName] : nil;
-    [self.navigation setAccessibilityLabel:self.navigation.toolTip ?: (inCollection ? @"Kembali ke koleksi"
-        : self.browsing ? @"Riwayat" : @"Koleksi")];
-    NSView *navigationSurface = self.navigation.superview;
-    CGFloat navigationWidth = namedBack && NSWidth(navigationSurface.superview.bounds) >= 385 ? 138 : 95;
-    [navigationSurface setFrameSize:NSMakeSize(navigationWidth,OCToolbarHeight)];
-    self.navigation.frame = navigationSurface.bounds;
-    self.action.toolTip = listing ? @"Tindakan koleksi" : @"Tindakan";
-    [self.action setAccessibilityLabel:self.action.toolTip];
-    self.addCollection.superview.hidden = !listing;
-
-    NSView *searchSurface = self.search.superview;
-    NSView *nextControl = (listing ? self.addCollection : self.action).superview;
-    const CGFloat gap = 8;
-    NSRect frame = searchSurface.frame;
-    CGFloat available = NSMinX(nextControl.frame)-NSMinX(frame)-NSWidth(navigationSurface.frame)-2*gap;
-    frame.size.width = MAX(75,MIN(self.bottom ? 408 : available,available));
-    searchSurface.frame = frame;
-    [navigationSurface setFrameOrigin:NSMakePoint(NSMaxX(frame)+gap,NSMinY(frame))];
+- (void)refreshTabState {
+    self.tabs.selectedID = self.activeTab;
+    NSString *name = [self collectionRowForID:self.activeTab][@"title"];
+    self.search.placeholderString = self.activeTab && name
+        ? [NSString stringWithFormat:@"Cari di %@",name] : @"Cari klip";
 }
 
-- (void)toggleNavigation:(id)sender {
-    [self navigateTo:self.collection || !self.browsing ? 1 : 0];
-}
-
-- (void)navigateTo:(NSInteger)segment {
-    BOOL browsing = segment == 1;
-    if (self.collection) [self closeCollection];
-    if (self.browsing == browsing) return;
+- (void)selectTab:(int64_t)collectionID {
+    if (!self.panel || collectionID == self.activeTab) return;
     [self clearPreview];
-    self.browsing = browsing;
-    [self refreshNavigation];
-    self.results.collections = browsing;
-    self.search.placeholderString = browsing ? @"Cari koleksi" : @"Cari klip";
+    self.activeTab = collectionID;
+    self.revealTab = YES;
+    self.search.stringValue = @"";
+    [self refreshTabState];
+    [self.tabs scrollSelectedToVisible];
     self.results.rows = @[];
     self.results.selected = -1;
     [self.results showEmptyTitle:nil detail:nil announce:NO];
-    [self.panel makeFirstResponder:browsing ? self.results : self.search];
-    self.search.stringValue = @"";
     [self.results layoutRows];
-    if (browsing) [self renderCollections];
-    else [self fetchCatalog];
+    [self.panel makeFirstResponder:self.results];
+    [self fetchCatalog];
 }
 
-- (void)renderCollections {
-    NSString *query = self.search.stringValue.lowercaseString;
-    NSMutableArray *rows = [NSMutableArray array];
-    for (NSDictionary *collection in self.collections) {
-        NSString *name = collection[@"name"];
-        if (!query.length || [name.lowercaseString containsString:query]) {
-            [rows addObject:@{@"id":collection[@"id"],@"title":name,@"kind":@"koleksi"}];
-        }
-    }
-    self.results.collections = YES;
-    [self renderRows:rows in:self.results emptyTitle:query.length ? @"Tidak ada hasil" : @"Belum ada koleksi"
-              detail:nil announce:query.length > 0];
+- (void)selectTabAtIndex:(NSInteger)index {
+    if (self.tabs) [self selectTab:[self.tabs collectionIDAtIndex:index]];
+}
+
+- (void)stepTab:(NSInteger)delta {
+    if (!self.tabs) return;
+    [self selectTabAtIndex:(NSInteger)oc_tab_step(self.tabs.selectedIndex,self.tabs.tabCount,delta)];
 }
 
 - (NSDictionary *)selectedIn:(OCResults *)results {
@@ -734,102 +692,7 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
     else canvas.selected = index;
     [self refreshSelectionHint:canvas];
     [canvas scrollRectToVisible:[canvas rowFrame:index]];
-    if (action == OCResultConfirm && canvas.collections) {
-        self.collectionRow = index;
-        [self openCollection:canvas.rows[(NSUInteger)index]];
-    } else if (action == OCResultConfirm) {
-        [self useSelected:OCPaste];
-    }
-}
-
-- (void)openCollection:(NSDictionary *)entry {
-    if (self.collection) return;
-    self.collection = [entry[@"id"] longLongValue];
-    self.collectionName = entry[@"title"];
-    [self refreshNavigation];
-    NSRect base = self.panel.frame;
-    NSRect bounds = NSInsetRect(self.panel.screen.visibleFrame,12,12);
-    CGFloat width = MIN(335,NSWidth(bounds));
-    CGFloat right = NSMaxX(bounds)-NSMaxX(base)-8, left = NSMinX(base)-NSMinX(bounds)-8;
-    if (self.bottom || (right < width && left < width)) {
-        self.inlineCollection = YES;
-        [self refreshNavigation];
-        self.results.collections = NO;
-        self.search.stringValue = @"";
-        self.search.placeholderString = [NSString stringWithFormat:@"Cari di %@",self.collectionName];
-        self.results.rows = @[];
-        self.results.selected = -1;
-        [self.results showEmptyTitle:nil detail:nil announce:NO];
-        [self.results layoutRows];
-        [self.panel makeFirstResponder:self.results];
-        [self fetchCatalog];
-        return;
-    }
-    CGFloat height = MIN(340,NSHeight(bounds));
-    NSRect row = [self.panel convertRectToScreen:[self.results convertRect:[self.results rowFrame:self.collectionRow] toView:nil]];
-    CGFloat y = Clamp(NSMaxY(row)-height+42,NSMinY(bounds),NSMaxY(bounds)-height);
-    CGFloat x = right >= width ? NSMaxX(base)+8 : NSMinX(base)-width-8;
-    self.side = MakePanel(NSMakeRect(x,y,width,height), entry[@"title"]);
-    NSView *view = PanelContent(self.side);
-    self.backButton = OCToolbarIcon(NSMakeRect(14,height-46,36,36), view,
-        @"chevron.left", @"Kembali ke koleksi", self, @selector(backToCollections:));
-    NSTextField *title = OCLabel(entry[@"title"],14,NSFontWeightSemibold);
-    title.frame = NSMakeRect(58,height-38,width-72,20);
-    [view addSubview:title];
-    self.sideSearch = [self makeSearch:NSMakeRect(14,height-90,width-28,OCToolbarHeight) view:view];
-    self.sideScroll = [self makeScroll:NSMakeRect(10,26,width-20,height-123) inView:view horizontal:NO];
-    self.sideResults = (OCResults *)self.sideScroll.documentView;
-    self.sideScrollObserver = [self observeScroll:self.sideScroll];
-    self.sideStatus = OCLabel(@"",11,NSFontWeightRegular);
-    self.sideStatus.textColor = NSColor.secondaryLabelColor;
-    self.sideStatus.frame = NSMakeRect(15,6,width-118,17);
-    [view addSubview:self.sideStatus];
-    self.sideUndoButton = [self makeUndoButtonIn:view right:width-14 y:2];
-    [self refreshUndoControls];
-    [self setMessage:self.recordingStatus];
-    __weak OCPicker *weakSelf = self;
-    self.sideResults.picked = ^(NSInteger index, OCResultAction action) {
-        [weakSelf pick:index in:weakSelf.sideResults action:action];
-    };
-    self.sideResults.contextMenu = ^NSMenu *(NSInteger index) {
-        OCPicker *picker = weakSelf;
-        return picker ? [picker contextFor:picker.sideResults.rows[(NSUInteger)index]] : nil;
-    };
-    [self.side makeKeyAndOrderFront:nil];
-    [self.side makeFirstResponder:self.sideResults];
-    [self fetchCatalog];
-}
-
-- (void)backToCollections:(id)sender { [self closeCollection]; }
-
-- (void)closeCollection {
-    if (!self.collection) return;
-    [self clearPreview];
-    BOOL wasInline = self.inlineCollection;
-    self.inlineCollection = NO;
-    self.collection = 0;
-    self.collectionName = nil;
-    [self refreshNavigation];
-    [self removeSideScrollObserver];
-    [self.side orderOut:nil];
-    self.side = nil;
-    self.backButton = nil;
-    self.sideStatus = nil;
-    self.sideUndoButton = nil;
-    self.sideResults = nil;
-    [self setMessage:self.recordingStatus];
-    if (wasInline) {
-        self.search.stringValue = @"";
-        self.search.placeholderString = @"Cari koleksi";
-        self.results.selected = -1;
-    }
-    if (self.browsing) {
-        [self renderCollections];
-        [self pick:self.collectionRow in:self.results confirm:NO];
-    }
-    [self.panel makeKeyAndOrderFront:nil];
-    [self.panel makeFirstResponder:self.results];
-    self.catalogTicket++;
+    if (action == OCResultConfirm) [self useSelected:OCPaste];
 }
 
 - (NSButton *)makeUndoButtonIn:(NSView *)view right:(CGFloat)right y:(CGFloat)y {
@@ -843,14 +706,11 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
 
 - (void)refreshUndoControls {
     BOOL available = self.undoTicket != 0;
-    NSButton *buttons[] = {self.undoButton,self.sideUndoButton};
-    for (NSUInteger i = 0; i < 2; i++) {
-        NSButton *button = buttons[i];
-        if (!available && button.window.firstResponder == button)
-            [button.window makeFirstResponder:self.activeResults.rows.count ? self.activeResults : self.activeSearch];
-        button.hidden = !available;
-        button.enabled = !self.undoPending;
-    }
+    NSButton *button = self.undoButton;
+    if (!available && button.window.firstResponder == button)
+        [button.window makeFirstResponder:self.results.rows.count ? self.results : self.search];
+    button.hidden = !available;
+    button.enabled = !self.undoPending;
     self.shortcutHints.hidden = available || self.statusWarning;
 }
 
@@ -881,7 +741,7 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
 }
 
 - (void)presentStatus:(NSString *)message warning:(BOOL)warning announce:(BOOL)announce {
-    NSTextField *label = self.side ? self.sideStatus : self.status;
+    NSTextField *label = self.status;
     if (!label) return;
     NSString *text = message.length ? message : self.undoMessage ?: @"";
     warning = warning && text.length;
@@ -963,7 +823,7 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
 - (void)useSelected:(OCPayloadMode)mode {
     OCResults *canvas = self.activeResults;
     NSDictionary *row = [self selectedIn:canvas];
-    if (!row || canvas.collections) return;
+    if (!row) return;
     int64_t identifier = [row[@"id"] longLongValue];
     if (mode == OCPaste) {
         if ([row[@"sensitive"] boolValue] && self.revealed != identifier) {
@@ -1187,7 +1047,7 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
 
 - (NSEvent *)handleKey:(NSEvent *)event {
     NSWindow *previewWindow = self.preview.contentViewController.view.window;
-    if (!self.panel || (event.window != self.panel && event.window != self.side && event.window != previewWindow)) return event;
+    if (!self.panel || (event.window != self.panel && event.window != previewWindow)) return event;
     NSEventModifierFlags flags = event.modifierFlags &
         (NSEventModifierFlagCommand | NSEventModifierFlagControl | NSEventModifierFlagOption | NSEventModifierFlagShift);
     uint16_t key = event.keyCode;
@@ -1202,27 +1062,28 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
     BOOL emptySearch = searchFocused && !composing && !(editor ? editor.string.length : search.stringValue.length);
     BOOL preview = self.preview.shown;
     BOOL horizontalArrow = results.horizontal && (key == kVK_LeftArrow || key == kVK_RightArrow);
-    NSButton *undoButton = self.side ? self.sideUndoButton : self.undoButton;
+    NSButton *undoButton = self.undoButton;
 
     if (flags == NSEventModifierFlagCommand && key == kVK_ANSI_Z && resultFocused && self.undoTicket) {
         if (!event.isARepeat) [self undoDelete:nil];
         return nil;
     }
-    if (flags == NSEventModifierFlagCommand && (key == kVK_ANSI_1 || key == kVK_ANSI_2)) {
-        if (!event.isARepeat) [self navigateTo:key == kVK_ANSI_1 ? 0 : 1];
-        return nil;
-    }
-    if (flags == NSEventModifierFlagCommand && horizontalArrow && !composing) {
-        if (event.isARepeat) return nil;
-        if (key == kVK_LeftArrow) {
-            if (self.collection) [self closeCollection];
-            else if (self.browsing) [self navigateTo:0];
-        } else if (!self.browsing) {
-            [self navigateTo:1];
-        } else if (results.collections) {
-            [self pick:results.selected in:results confirm:YES];
+    if (flags == NSEventModifierFlagCommand && !composing && event.window == window) {
+        // ⌘1…⌘9 jump to a tab; ⌘ with any arrow steps tabs, so both axes work in both layouts.
+        static const uint16_t digitKeys[] = {kVK_ANSI_1, kVK_ANSI_2, kVK_ANSI_3, kVK_ANSI_4, kVK_ANSI_5,
+                                             kVK_ANSI_6, kVK_ANSI_7, kVK_ANSI_8, kVK_ANSI_9};
+        for (NSInteger digit = 1; digit <= 9; digit++) {
+            if (key != digitKeys[digit-1]) continue;
+            int64_t index = oc_tab_for_digit(digit,self.tabs.tabCount);
+            if (!event.isARepeat && index >= 0) [self selectTabAtIndex:(NSInteger)index];
+            return nil;
         }
-        return nil;
+        BOOL back = key == kVK_LeftArrow || key == kVK_UpArrow;
+        BOOL forward = key == kVK_RightArrow || key == kVK_DownArrow;
+        if (back || forward) {
+            if (!event.isARepeat) [self stepTab:back ? -1 : 1];
+            return nil;
+        }
     }
     if (resultFocused && !preview && event.window == window &&
         !(flags & (NSEventModifierFlagCommand | NSEventModifierFlagControl)) &&
@@ -1231,7 +1092,7 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
         return event;
     }
     if (flags == NSEventModifierFlagOption && horizontalArrow && !composing && !preview &&
-        !results.collections && results.rows.count && (resultFocused || emptySearch)) {
+        results.rows.count && (resultFocused || emptySearch)) {
         // ⌥← / ⌥→ jump between days in the card row.
         if (searchFocused && ![window makeFirstResponder:results]) return event;
         [self pick:DayGroupIndex(results.rows,results.selected,key == kVK_RightArrow) in:results action:OCResultSelect];
@@ -1240,11 +1101,11 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
     if (flags & (NSEventModifierFlagCommand | NSEventModifierFlagControl | NSEventModifierFlagOption)) return event;
 
     if (!flags && (key == kVK_Delete || key == kVK_ForwardDelete) &&
-        !results.collections && resultFocused && !preview) {
+        resultFocused && !preview) {
         if (!event.isARepeat) [self deleteSelected];
         return nil;
     }
-    if (!flags && key == kVK_Space && !results.collections &&
+    if (!flags && key == kVK_Space &&
         (preview || ((resultFocused || emptySearch) && results.selected >= 0))) {
         if (!event.isARepeat) {
             if (preview) [self clearPreview];
@@ -1254,20 +1115,23 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
     }
     if (key == kVK_Escape) {
         if (preview) [self clearPreview];
-        else if (self.collection) [self closeCollection];
-        else if (self.browsing) [self navigateTo:0];
         else [self dismissRestoringFocus:YES];
         return nil;
+    }
+    if (focused == self.tabs && !flags) {
+        uint16_t previousKey = self.bottom ? kVK_LeftArrow : kVK_UpArrow;
+        uint16_t nextKey = self.bottom ? kVK_RightArrow : kVK_DownArrow;
+        if (key == previousKey || key == nextKey) {
+            [self stepTab:key == nextKey ? 1 : -1];
+            [window makeFirstResponder:self.tabs];
+            return nil;
+        }
     }
     if (key == kVK_Tab) {
         NSMutableArray<NSView *> *order = [NSMutableArray arrayWithObject:search];
         if (results.rows.count) [order addObject:results];
-        if (self.side) [order addObject:self.backButton];
-        else {
-            [order addObject:self.navigation];
-            if (!self.addCollection.superview.hidden) [order addObject:self.addCollection];
-            [order addObject:self.action];
-        }
+        [order addObject:self.tabs];
+        [order addObject:self.action];
         if (undoButton && !undoButton.hidden && undoButton.enabled) [order addObject:undoButton];
         NSUInteger index = searchFocused ? 0 : [order indexOfObjectIdenticalTo:(NSView *)focused];
         if (index == NSNotFound) index = 0;
@@ -1279,8 +1143,8 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
     }
     if (key == kVK_Return || key == kVK_ANSI_KeypadEnter) {
         if (preview) { [self useSelected:OCPaste]; return nil; }
-        if (focused == self.navigation || focused == self.backButton || focused == self.action ||
-            focused == self.addCollection || (undoButton && focused == undoButton)) {
+        if (focused == self.tabs) return nil;
+        if (focused == self.action || (undoButton && focused == undoButton)) {
             [(NSButton *)focused performClick:nil];
             return nil;
         }
@@ -1290,28 +1154,11 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
             return nil;
         }
     }
-    if (!flags && key == kVK_RightArrow && !preview && !horizontalArrow) {
-        NSRange selection = editor.selectedRange;
-        BOOL searchAtEnd = emptySearch || (searchFocused && editor && !composing &&
-            selection.length == 0 && selection.location == editor.string.length);
-        if (!self.browsing && (searchAtEnd || resultFocused)) {
-            if (!event.isARepeat) [self navigateTo:1];
-            return nil;
-        }
-        if (results.collections && (resultFocused || searchAtEnd)) {
-            if (!event.isARepeat) [self pick:results.selected in:results confirm:YES];
-            return nil;
-        }
-    }
     if (resultFocused && (flags & NSEventModifierFlagShift) && key == kVK_F10) {
         [self showClipActions];
         return nil;
     }
-    if (resultFocused && !flags && key == kVK_LeftArrow && !horizontalArrow) {
-        if (self.collection && !self.bottom) { [self closeCollection]; return nil; }
-        if (results.collections) { [self navigateTo:0]; return nil; }
-    }
-    BOOL extend = flags == NSEventModifierFlagShift && !results.collections &&
+    BOOL extend = flags == NSEventModifierFlagShift &&
         (key == kVK_UpArrow || key == kVK_DownArrow);
     if (results.rows.count && (!flags || extend)) {
         BOOL downFromSearch = searchFocused && !composing && key == kVK_DownArrow;
@@ -1339,12 +1186,13 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
 
 - (void)actions:(NSButton *)sender {
     NSMenu *menu = [[NSMenu alloc] initWithTitle:@"Tindakan"];
-    NSMenuItem *history = [self item:@"Riwayat" action:@selector(navigateMenu:) value:@0];
-    history.keyEquivalent = @"1";
-    [menu addItem:history];
-    NSMenuItem *collections = [self item:@"Koleksi" action:@selector(navigateMenu:) value:@1];
-    collections.keyEquivalent = @"2";
-    [menu addItem:collections];
+    for (NSInteger i = 0; i < self.tabs.tabCount; i++) {
+        NSString *title = i == 0 ? @"Riwayat" : self.collections[(NSUInteger)i-1][@"name"];
+        NSMenuItem *tab = [self item:title action:@selector(navigateMenu:) value:@(i)];
+        if (i < 9) tab.keyEquivalent = [NSString stringWithFormat:@"%ld",(long)i+1];
+        tab.state = i == self.tabs.selectedIndex ? NSControlStateValueOn : NSControlStateValueOff;
+        [menu addItem:tab];
+    }
     [menu addItem:NSMenuItem.separatorItem];
     [menu addItem:[self item:@"Pengaturan…" action:@selector(settings:) value:nil]];
     if (!OCAccessibilityReady()) {
@@ -1353,17 +1201,15 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
     OCResults *results = self.activeResults;
     NSDictionary *row = [self selectedIn:results];
     [menu addItem:[self item:@"Tambah koleksi…" action:@selector(createCollection:) value:nil]];
-    if (row && results.collections) {
-        [self addCollectionActionsFor:row toMenu:menu];
-    } else if (row) {
+    NSDictionary *activeCollection = [self collectionRowForID:self.activeTab];
+    if (activeCollection) [self addCollectionActionsFor:activeCollection toMenu:menu];
+    if (row) {
         NSMenuItem *clipActions = [[NSMenuItem alloc] initWithTitle:@"Tindakan klip" action:nil keyEquivalent:@""];
         clipActions.submenu = [self contextFor:row];
         [menu addItem:clipActions];
     }
-    if (!self.browsing) {
-        [menu addItem:NSMenuItem.separatorItem];
-        [menu addItem:[self item:@"Bersihkan riwayat…" action:@selector(clearHistory:) value:nil]];
-    }
+    [menu addItem:NSMenuItem.separatorItem];
+    [menu addItem:[self item:@"Bersihkan riwayat…" action:@selector(clearHistory:) value:nil]];
     [menu addItem:NSMenuItem.separatorItem];
     [menu addItem:[self item:@"Keluar" action:@selector(quitApp:) value:nil]];
     [menu popUpMenuPositioningItem:nil atLocation:NSMakePoint(0,0) inView:sender];
@@ -1378,7 +1224,7 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
     [self clearPreview];
     OCConfirmClearHistory(self.activePanel,NO,^{ [self sendAction:@{@"action":@"clear",@"all":@NO}]; });
 }
-- (void)navigateMenu:(NSMenuItem *)sender { [self navigateTo:[sender.representedObject integerValue]]; }
+- (void)navigateMenu:(NSMenuItem *)sender { [self selectTabAtIndex:[sender.representedObject integerValue]]; }
 - (void)accessibilityGuide:(id)sender { if (self.openAccessibilityGuide) self.openAccessibilityGuide(); }
 
 - (void)createCollection:(id)sender {
@@ -1426,7 +1272,7 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
     [alert addButtonWithTitle:@"Hapus koleksi"].hasDestructiveAction = YES;
     [alert beginSheetModalForWindow:panel completionHandler:^(NSModalResponse response) {
         if (response == NSAlertSecondButtonReturn) {
-            if ([collection[@"id"] longLongValue] == self.collection) [self closeCollection];
+            if ([collection[@"id"] longLongValue] == self.activeTab) [self selectTab:0];
             [self sendAction:@{@"action":@"delete_collection",@"id":collection[@"id"]}];
         }
     }];
@@ -1464,9 +1310,9 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
         assigned.submenu = collections;
         [menu addItem:assigned];
     }
-    if (self.collection) {
+    if (self.activeTab) {
         [menu addItem:[self item:@"Keluarkan dari koleksi" action:@selector(runMenuAction:)
-            value:@{@"action":@"membership",@"id":identifier,@"collection":@(self.collection),@"add":@NO}]];
+            value:@{@"action":@"membership",@"id":identifier,@"collection":@(self.activeTab),@"add":@NO}]];
     }
     if ([row[@"manually_sensitive"] boolValue]) {
         [menu addItem:[self item:@"Lepas tanda sensitif" action:@selector(runMenuAction:)
@@ -1496,7 +1342,6 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
 
 - (void)deleteSelected {
     OCResults *results = self.activeResults;
-    if (results.collections) return;
     if (!results.selectedIndexes.count) return;
     NSMutableArray<NSNumber *> *identifiers = [NSMutableArray arrayWithCapacity:results.selectedIndexes.count];
     [results.selectedIndexes enumerateIndexesUsingBlock:^(NSUInteger index, __unused BOOL *stop) {
