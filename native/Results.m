@@ -347,10 +347,14 @@ static NSColor *Swatch(NSString *hex) {
         BOOL contrast = IncreaseContrast();
         NSColor *neutral = dark ? [NSColor colorWithWhite:0.12 alpha:contrast ? 0.8 : 0.42]
                                 : [NSColor colorWithWhite:0.98 alpha:contrast ? 0.85 : 0.39];
-        NSColor *fill = selected ? [accent colorWithAlphaComponent:dark ? 0.24 : 0.16] : neutral;
+        // Selection uses the same soft neutral glass as the tabs and toolbar; accent only for Increase Contrast.
+        NSColor *fill = selected ? [NSColor.whiteColor colorWithAlphaComponent:dark ? 0.16 : 0.60] : neutral;
         [fill setFill];
         [outline fill];
-        NSColor *stroke = selected ? [accent colorWithAlphaComponent:lead ? 0.92 : 0.55]
+        NSColor *selectedStroke = contrast ? [accent colorWithAlphaComponent:lead ? 0.92 : 0.55]
+            : [(dark ? NSColor.whiteColor : NSColor.blackColor) colorWithAlphaComponent:
+                lead ? (dark ? 0.42 : 0.22) : (dark ? 0.22 : 0.10)];
+        NSColor *stroke = selected ? selectedStroke
             : [(dark ? NSColor.whiteColor : NSColor.blackColor) colorWithAlphaComponent:
                 contrast ? 0.55 : dark ? 0.15 : 0.10];
         [stroke setStroke];

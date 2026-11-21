@@ -10,16 +10,21 @@ static const CGFloat MaxPillWidth = 160;
 static const CGFloat AddWidth = 36;
 static const CGFloat EditWidth = 150;
 
-// Same selected look as a clip row in OCResults: translucent accent fill with an accent outline.
-static void DrawSelection(NSRect rect, CGFloat outlineAlpha) {
+// Soft glass pill in the same neutral palette as OCToolbarCapsule (search field, ⋯ button), a bit
+// brighter so it reads as selected. The inline name field adds only a faint accent outline.
+static void DrawGlass(NSRect rect, BOOL editing) {
     BOOL dark = [[NSAppearance.currentDrawingAppearance
         bestMatchFromAppearancesWithNames:@[NSAppearanceNameAqua, NSAppearanceNameDarkAqua]]
         isEqualToString:NSAppearanceNameDarkAqua];
-    NSColor *accent = NSColor.controlAccentColor;
+    BOOL contrast = NSWorkspace.sharedWorkspace.accessibilityDisplayShouldIncreaseContrast;
     NSBezierPath *shape = [NSBezierPath bezierPathWithRoundedRect:NSInsetRect(rect,0.5,0.5) xRadius:11 yRadius:11];
-    [[accent colorWithAlphaComponent:dark ? 0.24 : 0.16] setFill];
+    CGFloat fillAlpha = dark ? (editing ? 0.20 : 0.15) : (editing ? 0.75 : 0.55);
+    [[NSColor.whiteColor colorWithAlphaComponent:fillAlpha] setFill];
     [shape fill];
-    [[accent colorWithAlphaComponent:outlineAlpha] setStroke];
+    NSColor *stroke = editing
+        ? [NSColor.controlAccentColor colorWithAlphaComponent:contrast ? 0.9 : 0.45]
+        : [(dark ? NSColor.whiteColor : NSColor.blackColor) colorWithAlphaComponent:contrast ? 0.6 : dark ? 0.26 : 0.12];
+    [stroke setStroke];
     shape.lineWidth = 1;
     [shape stroke];
 }
@@ -213,9 +218,10 @@ static NSImage *TintedSymbol(NSString *name, CGFloat size, NSColor *color) {
     for (NSInteger i = 0; i < self.tabCount; i++) {
         NSRect frame = [self frameAtIndex:i];
         if (!NSIntersectsRect(frame, dirtyRect) || i == editing) continue;
-        BOOL active = i == selected;
+        // While naming a collection only the name field looks active.
+        BOOL active = i == selected && editing < 0;
         NSRect pill = vertical ? NSInsetRect(frame, 4, 2) : frame;
-        if (active) DrawSelection(pill, contrast ? 1 : 0.8);
+        if (active) DrawGlass(pill, NO);
         NSColor *textColor = active || contrast ? NSColor.labelColor : NSColor.secondaryLabelColor;
         CGFloat left = NSMinX(pill) + (vertical ? 10 : PillPadding);
         if (i == 0) {
@@ -242,7 +248,7 @@ static NSImage *TintedSymbol(NSString *name, CGFloat size, NSColor *color) {
     if (editing >= 0) {
         NSRect frame = [self frameAtIndex:editing];
         NSRect pill = vertical ? NSInsetRect(frame, 4, 2) : frame;
-        DrawSelection(pill, 0.95);
+        DrawGlass(pill, YES);
     }
 
     NSRect add = [self frameAtIndex:self.plusIndex];
