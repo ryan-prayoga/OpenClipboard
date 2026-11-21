@@ -433,6 +433,9 @@ static void SettingsTitle(NSView *pane, NSString *title) {
         (long)[NSUserDefaults.standardUserDefaults integerForKey:HistoryLimit]]];
     self.historyLimit.frame = NSMakeRect(292,157,77,25);
     self.historyLimit.alignment = NSTextAlignmentCenter;
+    self.historyLimit.target = self;
+    self.historyLimit.action = @selector(saveLimit:);
+    [self.historyLimit setAccessibilityLabel:@"Batas jumlah klip biasa"];
     [view addSubview:self.historyLimit];
     PlaceButton(view, @"Simpan", self, @selector(saveLimit:), NSMakeRect(372,153,91,31));
 
@@ -703,7 +706,7 @@ static void SettingsTitle(NSView *pane, NSString *title) {
     } else if ([kind isEqualToString:@"limit"]) {
         [NSUserDefaults.standardUserDefaults setObject:event[@"value"] forKey:HistoryLimit];
         self.historyLimit.stringValue = [event[@"value"] stringValue];
-        self.historyFeedback.stringValue = HistoryStorageNote;
+        self.historyFeedback.stringValue = @"Batas klip disimpan.";
     } else if ([kind isEqualToString:@"error"]) {
         NSString *reason = event[@"reason"];
         BOOL full = [reason isEqualToString:@"full"];

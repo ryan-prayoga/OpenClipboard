@@ -250,7 +250,7 @@ static NSImage *GuideSymbol(NSString *name, CGFloat size) {
 
 - (void)updateInstructionsForSettingsLink:(BOOL)opened {
     if (!opened) {
-        self.instructions.stringValue = @"Buka Accessibility atau Device\nControl and Data Access.";
+        self.instructions.stringValue = @"Buka Privasi & Keamanan →\nAksesibilitas, lalu klik +.";
         return;
     }
     self.instructions.stringValue = self.dragIcon.canDrag

@@ -36,6 +36,15 @@ static BOOL DarkAppearance(void) {
         isEqualToString:NSAppearanceNameDarkAqua];
 }
 
+static BOOL IncreaseContrast(void) {
+    return NSWorkspace.sharedWorkspace.accessibilityDisplayShouldIncreaseContrast;
+}
+
+// Metadata text switches to the primary label color when Increase Contrast is on.
+static NSColor *Secondary(void) {
+    return IncreaseContrast() ? NSColor.labelColor : NSColor.secondaryLabelColor;
+}
+
 static NSColor *KindColor(NSString *kind) {
     return @{@"teks":NSColor.systemBlueColor, @"url":NSColor.systemTealColor,
         @"gambar":NSColor.systemPurpleColor, @"json":NSColor.systemOrangeColor,
@@ -55,7 +64,7 @@ static NSImage *SymbolTinted(NSString *name, NSColor *tint) {
 }
 
 static NSImage *Symbol(NSString *name) {
-    return SymbolTinted(name, NSColor.secondaryLabelColor);
+    return SymbolTinted(name, Secondary());
 }
 
 static void DrawImage(NSImage *image, NSRect rect) {
@@ -77,9 +86,26 @@ static void DrawMultiline(NSString *text, NSRect rect, NSFont *font, NSColor *co
             NSParagraphStyleAttributeName:style} context:nil];
 }
 
+// Today shows the time. Older clips show "Kemarin" or a date, since history can span a year.
 static NSString *ActivityTime(NSNumber *timestamp) {
     NSDate *date = [NSDate dateWithTimeIntervalSince1970:timestamp.doubleValue / 1000.0];
-    return [NSDateFormatter localizedStringFromDate:date dateStyle:NSDateFormatterNoStyle timeStyle:NSDateFormatterShortStyle];
+    NSCalendar *calendar = NSCalendar.currentCalendar;
+    if ([calendar isDateInToday:date]) {
+        return [NSDateFormatter localizedStringFromDate:date dateStyle:NSDateFormatterNoStyle
+                                              timeStyle:NSDateFormatterShortStyle];
+    }
+    if ([calendar isDateInYesterday:date]) return @"Kemarin";
+    if ([calendar component:NSCalendarUnitYear fromDate:date] != [calendar component:NSCalendarUnitYear fromDate:NSDate.date]) {
+        return [NSDateFormatter localizedStringFromDate:date dateStyle:NSDateFormatterShortStyle
+                                              timeStyle:NSDateFormatterNoStyle];
+    }
+    static NSDateFormatter *sameYear;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        sameYear = [NSDateFormatter new];
+        [sameYear setLocalizedDateFormatFromTemplate:@"dMMM"];
+    });
+    return [sameYear stringFromDate:date];
 }
 
 static NSColor *Swatch(NSString *hex) {
@@ -138,7 +164,7 @@ static NSColor *Swatch(NSString *hex) {
         [self addSubview:_emptyTitle];
         _emptyDetail = [NSTextField wrappingLabelWithString:@""];
         _emptyDetail.font = [NSFont systemFontOfSize:12];
-        _emptyDetail.textColor = NSColor.secondaryLabelColor;
+        _emptyDetail.textColor = Secondary();
         _emptyDetail.hidden = YES;
         [self addSubview:_emptyDetail];
         [self setAccessibilityElement:YES];
@@ -318,13 +344,15 @@ static NSColor *Swatch(NSString *hex) {
 
     NSBezierPath *outline = Rounded(NSInsetRect(rect,0.5,0.5), self.horizontal ? 17 : 11);
     if (self.horizontal || selected) {
-        NSColor *neutral = dark ? [NSColor colorWithWhite:0.12 alpha:0.42]
-                                : [NSColor colorWithWhite:0.98 alpha:0.39];
+        BOOL contrast = IncreaseContrast();
+        NSColor *neutral = dark ? [NSColor colorWithWhite:0.12 alpha:contrast ? 0.8 : 0.42]
+                                : [NSColor colorWithWhite:0.98 alpha:contrast ? 0.85 : 0.39];
         NSColor *fill = selected ? [accent colorWithAlphaComponent:dark ? 0.24 : 0.16] : neutral;
         [fill setFill];
         [outline fill];
         NSColor *stroke = selected ? [accent colorWithAlphaComponent:lead ? 0.92 : 0.55]
-            : [(dark ? NSColor.whiteColor : NSColor.blackColor) colorWithAlphaComponent:dark ? 0.15 : 0.10];
+            : [(dark ? NSColor.whiteColor : NSColor.blackColor) colorWithAlphaComponent:
+                contrast ? 0.55 : dark ? 0.15 : 0.10];
         [stroke setStroke];
         outline.lineWidth = 1;
         [outline stroke];
@@ -361,15 +389,16 @@ static NSColor *Swatch(NSString *hex) {
     DrawText(imageKind ? @"Gambar" : title,NSMakeRect(left+39,center-16,MAX(0,right-left-95),18),13,
              NSFontWeightSemibold,NSColor.labelColor);
     NSString *detail = imageSize ?: (host.length ? host : sensitive ? @"Spasi untuk membuka" : KindLabel(kind));
-    DrawText(detail,NSMakeRect(left+39,center+2,MAX(0,right-left-95),16),10.5,
-             NSFontWeightMedium,NSColor.secondaryLabelColor);
-    if (pinned) DrawImage(Symbol(@"pin"),NSMakeRect(right-12,center-7,12,12));
-    else if (!sensitive) {
+    DrawText(detail,NSMakeRect(left+39,center+2,MAX(0,right-left-95),16),11.5,
+             NSFontWeightMedium,Secondary());
+    // A pinned clip keeps its time and shows the pin under it.
+    if (pinned) DrawImage(Symbol(@"pin"),NSMakeRect(right-12,center+4,11,11));
+    if (!sensitive) {
         NSMutableParagraphStyle *align = [NSMutableParagraphStyle new];
         align.alignment = NSTextAlignmentRight;
         [ActivityTime(entry[@"last_used"]) drawInRect:NSMakeRect(right-56,center-7,56,16)
-            withAttributes:@{NSFontAttributeName:[NSFont monospacedDigitSystemFontOfSize:10 weight:NSFontWeightMedium],
-                NSForegroundColorAttributeName:NSColor.secondaryLabelColor, NSParagraphStyleAttributeName:align}];
+            withAttributes:@{NSFontAttributeName:[NSFont monospacedDigitSystemFontOfSize:11 weight:NSFontWeightMedium],
+                NSForegroundColorAttributeName:Secondary(), NSParagraphStyleAttributeName:align}];
     }
 }
 
@@ -387,7 +416,7 @@ static NSColor *Swatch(NSString *hex) {
         DrawMultiline(title,NSMakeRect(left+4,top+60,right-left-8,76),
             [NSFont systemFontOfSize:20 weight:NSFontWeightSemibold],NSColor.labelColor);
         DrawText(@"Buka koleksi",NSMakeRect(left+4,top+178,right-left-33,18),11,
-            NSFontWeightMedium,NSColor.secondaryLabelColor);
+            NSFontWeightMedium,Secondary());
         DrawImage(Symbol(@"chevron.right"),NSMakeRect(right-12,top+181,10,12));
         return;
     }
@@ -427,7 +456,7 @@ static NSColor *Swatch(NSString *hex) {
         NSString *path = domain.location == NSNotFound ? title : [title substringFromIndex:NSMaxRange(domain)];
         if (path.length) {
             DrawMultiline(path,NSMakeRect(left+11,NSMinY(body)+42,NSWidth(body)-22,65),
-                          [NSFont systemFontOfSize:12], NSColor.secondaryLabelColor);
+                          [NSFont systemFontOfSize:12], Secondary());
         }
     } else {
         BOOL mono = [kind isEqualToString:@"json"] || [kind isEqualToString:@"kode"];
@@ -441,15 +470,15 @@ static NSColor *Swatch(NSString *hex) {
     NSRectFill(NSMakeRect(left,top+176,right-left,1));
     NSString *caption = sensitive ? @"Spasi untuk membuka" : imageSize;
     if (caption.length) {
-        DrawText(caption,NSMakeRect(left,top+184,right-left-47,15),10.5,
-                 NSFontWeightMedium,NSColor.secondaryLabelColor);
+        DrawText(caption,NSMakeRect(left,top+184,right-left-47,15),11.5,
+                 NSFontWeightMedium,Secondary());
     }
     if (!sensitive) {
         NSMutableParagraphStyle *align = [NSMutableParagraphStyle new];
         align.alignment = NSTextAlignmentRight;
         [ActivityTime(entry[@"last_used"]) drawInRect:NSMakeRect(right-56,top+184,56,15)
-            withAttributes:@{NSFontAttributeName:[NSFont monospacedDigitSystemFontOfSize:10.5 weight:NSFontWeightMedium],
-                NSForegroundColorAttributeName:NSColor.secondaryLabelColor, NSParagraphStyleAttributeName:align}];
+            withAttributes:@{NSFontAttributeName:[NSFont monospacedDigitSystemFontOfSize:11.5 weight:NSFontWeightMedium],
+                NSForegroundColorAttributeName:Secondary(), NSParagraphStyleAttributeName:align}];
     }
 }
 
@@ -514,10 +543,17 @@ static NSColor *Swatch(NSString *hex) {
         NSRect rect = [self rowFrame:(NSInteger)index];
         if (!NSIntersectsRect(rect, visible)) continue;
         NSDictionary *entry = self.rows[index];
-        NSString *title = [entry[@"sensitive"] boolValue] ? @"Item sensitif" : entry[@"title"];
+        BOOL sensitive = [entry[@"sensitive"] boolValue];
+        NSString *title = sensitive ? @"Item sensitif" : entry[@"title"];
+        NSString *label = title.length ? title : @"Teks kosong";
+        if (!self.collections && !sensitive) {
+            // Kind, pin state, and time are shown visually, so VoiceOver gets them too.
+            label = [NSString stringWithFormat:@"%@, %@%@, %@", label, KindLabel(entry[@"kind"]),
+                [entry[@"pinned"] boolValue] ? @", disematkan" : @"", ActivityTime(entry[@"last_used"])];
+        }
         NSRect screen = [self.window convertRectToScreen:[self convertRect:rect toView:nil]];
         OCRowAccessibility *item = [OCRowAccessibility accessibilityElementWithRole:NSAccessibilityButtonRole
-                frame:screen label:title.length ? title : @"Teks kosong" parent:self];
+                frame:screen label:label parent:self];
         [item setAccessibilityElement:YES];
         [item setAccessibilityEnabled:YES];
         item.results = self;

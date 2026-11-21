@@ -609,7 +609,7 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
     NSUInteger count = results.selectedIndexes.count;
     self.shortcutHints.stringValue = !count ? @""
         : results.collections ? @"↵ Buka koleksi"
-        : count > 1 ? [NSString stringWithFormat:@"%lu klip dipilih    ⌫ Hapus",(unsigned long)count]
+        : count > 1 ? [NSString stringWithFormat:@"%lu dipilih    ↵ Tempel 1    ⌫ Hapus",(unsigned long)count]
         : self.activePanel.firstResponder == results ? @"Spasi Pratinjau    ↵ Tempel    ⌫ Hapus"
         : @"Spasi Pratinjau    ↵ Tempel";
 }
@@ -1111,7 +1111,7 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
         }
         preview.string = text ?: [self selectedIn:self.activeResults][@"title"] ?: @"";
         preview.editable = NO;
-        preview.selectable = NO;
+        preview.selectable = YES;
         preview.drawsBackground = NO;
         preview.font = ([kind isEqualToString:@"json"] || [kind isEqualToString:@"kode"])
             ? [NSFont monospacedSystemFontOfSize:12 weight:NSFontWeightRegular] : [NSFont systemFontOfSize:13];

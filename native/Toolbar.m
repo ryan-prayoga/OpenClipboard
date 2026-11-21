@@ -21,7 +21,9 @@ static const CGFloat OCToolbarRadius = 11;
     NSRect frame = NSInsetRect(self.bounds, 0.5, 0.5);
     NSBezierPath *shape = [NSBezierPath bezierPathWithRoundedRect:frame xRadius:OCToolbarRadius yRadius:OCToolbarRadius];
     NSColor *fill = [NSColor.whiteColor colorWithAlphaComponent:dark ? 0.085 : 0.40];
-    NSColor *outline = [(dark ? NSColor.whiteColor : NSColor.blackColor) colorWithAlphaComponent:dark ? 0.19 : 0.15];
+    BOOL contrast = NSWorkspace.sharedWorkspace.accessibilityDisplayShouldIncreaseContrast;
+    NSColor *outline = [(dark ? NSColor.whiteColor : NSColor.blackColor)
+        colorWithAlphaComponent:contrast ? 0.6 : dark ? 0.19 : 0.15];
     [fill setFill];
     [shape fill];
     [outline setStroke];
