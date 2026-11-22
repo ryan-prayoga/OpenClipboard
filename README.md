@@ -4,9 +4,9 @@
 
 <h1 align="center">OpenClipboard</h1>
 
-<p align="center">Riwayat clipboard untuk Mac, dibuka dengan ⌘⇧V.</p>
+<p align="center">Riwayat clipboard untuk teks, gambar, tautan, dan warna di Mac. Buka dengan ⌘⇧V.</p>
 
-OpenClipboard berguna saat kamu sudah menyalin teks lain dan perlu mengambil salinan sebelumnya. Buka riwayat, ketik sebagian teks yang kamu ingat, lalu pilih klipnya. Tautan, gambar, dan warna juga ikut terekam saat aplikasi berjalan.
+OpenClipboard berguna saat kamu sudah menyalin teks lain dan perlu mengambil salinan sebelumnya. Buka riwayat, ketik sebagian teks yang kamu ingat, lalu pilih klipnya.
 
 ## Unduh dan pasang
 
@@ -43,6 +43,12 @@ Kalau lebih suka melihat isi klip sebagai kartu, pilih **Panel bawah layar** di 
 | <kbd>Esc</kbd> | Tutup riwayat |
 
 Sematkan potongan teks yang sering dipakai, misalnya alamat pengiriman atau jawaban untuk pertanyaan yang berulang. Kalau beberapa klip berkaitan, buat koleksi dari tombol **+**. Klip bisa diseret ke tab koleksi, dan tiap koleksi bisa diberi warna.
+
+## Salin dan tempel gambar
+
+Salin gambar dari aplikasi seperti Preview, atau ambil screenshot ke clipboard dengan <kbd>⌃⇧⌘4</kbd>. Buka OpenClipboard dengan <kbd>⌘⇧V</kbd>, pilih klip berlabel **Gambar**, lalu tekan <kbd>Spasi</kbd> untuk melihat pratinjau atau <kbd>Enter</kbd> untuk memakainya kembali.
+
+OpenClipboard menyimpan gambar yang tersedia di clipboard sebagai PNG atau TIFF, dengan batas 25 MiB per klip gambar.
 
 ## Pengaturan dan privasi
 
