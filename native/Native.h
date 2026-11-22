@@ -34,6 +34,7 @@ static inline BOOL OCPerformEditShortcut(NSEvent *event, NSResponder *target) {
 BOOL OCSend(NSDictionary *command);
 void OCConfirmClearHistory(NSWindow *window, BOOL all, dispatch_block_t confirm);
 BOOL OCGetCaret(pid_t pid, NSRect *result);
+NSArray<NSPasteboardItem *> *OCPasteboardItems(NSArray<NSDictionary *> *parts);
 BOOL OCWriteClipboard(NSArray<NSDictionary *> *parts, BOOL sensitive, NSInteger *version);
 BOOL OCPostPaste(pid_t destination, NSInteger version);
 

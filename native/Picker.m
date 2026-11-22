@@ -5,8 +5,43 @@
 #import "Toolbar.h"
 #import <ApplicationServices/ApplicationServices.h>
 #import <Carbon/Carbon.h>
+#import <QuartzCore/QuartzCore.h>
 
 static const CGFloat CompactPanelInset = 14;
+static const CGFloat BottomPanelInset = 20;
+static const CGFloat BottomScreenInset = 17;
+static const CGFloat ResultsTopGap = 10;
+static const CGFloat FooterHeight = 25;
+static const NSTimeInterval FeedbackFadeDuration = 0.15;
+static const CGFloat BottomPanelEntranceDistance = 12;
+static const CGFloat BottomPanelExitDistance = 8;
+static const NSTimeInterval BottomPanelEntranceDuration = 0.25;
+static const NSTimeInterval BottomPanelExitDuration = 0.15;
+
+static void AnimatePanel(NSPanel *panel, NSRect frame, CGFloat opacity,
+                         NSTimeInterval duration, void (^completion)(void)) {
+    [NSAnimationContext runAnimationGroup:^(NSAnimationContext *context) {
+        context.duration = duration;
+        context.timingFunction = [CAMediaTimingFunction functionWithControlPoints:0.22 :1 :0.36 :1];
+        [panel.animator setFrame:frame display:YES];
+        panel.animator.alphaValue = opacity;
+    } completionHandler:completion];
+}
+
+static void FadeInFeedback(NSView *view) {
+    if (NSWorkspace.sharedWorkspace.accessibilityDisplayShouldReduceMotion) return;
+    view.wantsLayer = YES;
+    CABasicAnimation *fade = [CABasicAnimation animationWithKeyPath:@"opacity"];
+    fade.fromValue = @0.35;
+    fade.toValue = @1;
+    fade.duration = FeedbackFadeDuration;
+    fade.timingFunction = [CAMediaTimingFunction functionWithControlPoints:0.23 :1 :0.32 :1];
+    [view.layer addAnimation:fade forKey:@"appear"];
+}
+
+static CGFloat PanelChromeHeight(BOOL bottom) {
+    return (bottom ? BottomPanelInset+15 : CompactPanelInset+11) + OCToolbarHeight + ResultsTopGap + FooterHeight;
+}
 static const CGFloat SearchFieldInset = 33;
 static const CGFloat SearchTextInset = 2;
 
@@ -118,6 +153,7 @@ static NSPanel *MakePanel(NSRect rect, NSString *title) {
         // Sample the other windows behind the panel before applying the clear glass treatment.
         NSRect materialFrame = NSInsetRect(bounds,2,2);
         NSVisualEffectView *backdrop = [[NSVisualEffectView alloc] initWithFrame:materialFrame];
+        backdrop.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
         backdrop.blendingMode = NSVisualEffectBlendingModeBehindWindow;
         backdrop.material = NSVisualEffectMaterialPopover;
         backdrop.state = NSVisualEffectStateActive;
@@ -125,10 +161,12 @@ static NSPanel *MakePanel(NSRect rect, NSString *title) {
         [root addSubview:backdrop];
 
         NSGlassEffectView *glass = [[NSGlassEffectView alloc] initWithFrame:bounds];
+        glass.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
         glass.style = NSGlassEffectViewStyleClear;
         glass.cornerRadius = radius;
         glass.effectIsInteractive = YES;
         NSView *content = [[NSView alloc] initWithFrame:bounds];
+        content.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
         glass.contentView = content;
         [root addSubview:glass];
         panel.contentView = root;
@@ -139,6 +177,16 @@ static NSPanel *MakePanel(NSRect rect, NSString *title) {
 
 static NSView *PanelContent(NSPanel *panel) {
     return ((OCPanel *)panel).surfaceContent;
+}
+
+static void SetCollectionColorDot(NSMenuItem *item, NSString *key, int64_t identifier) {
+    NSColor *color = OCTabColor(key,identifier);
+    item.image = [NSImage imageWithSize:NSMakeSize(10,10) flipped:NO drawingHandler:^BOOL(NSRect rect) {
+        [color setFill];
+        [[NSBezierPath bezierPathWithOvalInRect:rect] fill];
+        return YES;
+    }];
+    item.preferredImageVisibility = NSMenuItemImageVisibilityVisible;
 }
 
 static void ReportMetric(const char *metric, BOOL bottom, NSTimeInterval started) {
@@ -179,11 +227,11 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
 
 @interface OCPicker () <NSSearchFieldDelegate, NSPopoverDelegate>
 @property(nonatomic, strong) NSPanel *panel;
+@property(nonatomic, strong) NSPanel *closingPanel;
 @property(nonatomic, strong) NSRunningApplication *origin;
 @property(nonatomic, strong) NSSearchField *search;
 @property(nonatomic, strong) NSButton *action;
 @property(nonatomic, strong) NSTextField *status;
-@property(nonatomic, strong) NSTextField *shortcutHints;
 @property(nonatomic, strong) NSButton *undoButton;
 @property(nonatomic) uint64_t undoTicket;
 @property(nonatomic) BOOL undoPending;
@@ -206,16 +254,19 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
 @property(nonatomic) int64_t activeTab;
 @property(nonatomic) BOOL revealTab;
 @property(nonatomic) uint64_t catalogTicket;
+@property(nonatomic) BOOL catalogPending;
+@property(nonatomic) BOOL catalogFailed;
 @property(nonatomic) NSTimeInterval searchStarted;
 @property(nonatomic) uint64_t payloadTicket;
+@property(nonatomic) uint64_t nextPayloadTicket;
+@property(nonatomic, copy) NSDictionary<NSNumber *, NSNumber *> *dragClips;
+@property(nonatomic, strong) NSMutableDictionary<NSNumber *, NSArray<NSPasteboardItem *> *> *dragItems;
 @property(nonatomic) uint64_t panelToken;
 @property(nonatomic) int64_t revealed;
 @property(nonatomic) OCPayloadMode payloadMode;
 @property(nonatomic, strong) NSPanel *toast;
 @property(nonatomic) uint64_t toastTicket;
 @property(nonatomic) uint64_t messageTicket;
-@property(nonatomic) BOOL statusWarning;
-@property(nonatomic) CGFloat statusWidth;
 @end
 
 @implementation OCPicker
@@ -248,6 +299,8 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
     self.revealed = 0;
     self.payloadMode = OCIdle;
     self.searchStarted = 0;
+    self.catalogPending = NO;
+    self.catalogFailed = NO;
     [self.images removeAllObjects];
     [self.requested removeAllObjects];
 
@@ -257,13 +310,12 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
     BOOL hasCaret = !bottom && OCGetCaret(self.origin.processIdentifier,&caret);
     NSPoint anchor = hasCaret ? caret.origin : pointer;
     NSScreen *screen = ScreenAt(anchor);
-    NSRect room = NSInsetRect(screen.visibleFrame, bottom ? 0 : 12, bottom ? 17 : 12);
-    if (bottom) {
-        room.origin.x = NSMinX(screen.frame);
-        room.size.width = NSWidth(screen.frame);
-    }
+    CGFloat screenInset = bottom ? BottomScreenInset : 12;
+    NSRect room = NSInsetRect(screen.visibleFrame, screenInset, screenInset);
     CGFloat width = bottom ? NSWidth(room) : NSWidth(room) >= 520 ? 520 : MIN(432, NSWidth(room));
-    CGFloat targetHeight = bottom ? (width >= 710 ? 328 : 372) : 380;
+    CGFloat chrome = PanelChromeHeight(bottom);
+    CGFloat targetHeight = chrome + (bottom ? [OCResults cardViewportHeight]
+        : [OCResults compactViewportHeightWithin:CGFLOAT_MAX]);
     CGFloat height = MIN(targetHeight, room.size.height);
     CGFloat x = NSMinX(room);
     CGFloat y = NSMinY(room);
@@ -276,26 +328,47 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
         CGFloat above = NSMaxY(room)-upperEdge;
         BOOL placeBelow = below >= height || below >= above;
         height = MIN(height,MAX(140,placeBelow ? below : above));
+        height = chrome + [OCResults compactViewportHeightWithin:height-chrome];
         y = Clamp(placeBelow ? anchor.y-gap-height : upperEdge,NSMinY(room),NSMaxY(room)-height);
     }
 
-    self.panel = MakePanel(NSMakeRect(x,y,width,height), @"Riwayat OpenClipboard");
-    [self buildMain:PanelContent(self.panel)];
+    NSRect restingFrame = NSMakeRect(x,y,width,height);
+    BOOL slideIn = bottom && !NSWorkspace.sharedWorkspace.accessibilityDisplayShouldReduceMotion;
+    NSRect startFrame = slideIn ? NSOffsetRect(restingFrame,0,-BottomPanelEntranceDistance) : restingFrame;
+    CGFloat startOpacity = slideIn ? 0 : 1;
+    NSPanel *closing = self.closingPanel;
+    if (closing) {
+        NSRect closingFrame = closing.frame;
+        if (slideIn && closing.screen == screen && NSEqualSizes(closingFrame.size,restingFrame.size)) {
+            startFrame = closingFrame;
+            startOpacity = closing.alphaValue;
+        }
+        [closing orderOut:nil];
+        self.closingPanel = nil;
+    }
+    NSPanel *panel = MakePanel(startFrame, @"Riwayat OpenClipboard");
+    if (slideIn) {
+        panel.animationBehavior = NSWindowAnimationBehaviorNone;
+        panel.alphaValue = startOpacity;
+    }
+    self.panel = panel;
+    [self buildMain:PanelContent(panel)];
     [self installMonitors];
-    [self.panel makeKeyAndOrderFront:nil];
-    if ([self.panel makeFirstResponder:self.results]) ReportMetric("open", self.bottom, started);
+    [panel makeKeyAndOrderFront:nil];
+    if ([panel makeFirstResponder:self.results]) ReportMetric("open", self.bottom, started);
+    if (slideIn) AnimatePanel(panel,restingFrame,1,BottomPanelEntranceDuration,nil);
     [self fetchCatalog];
 }
 
 - (void)buildMain:(NSView *)view {
     CGFloat w = view.bounds.size.width, h = view.bounds.size.height;
-    CGFloat edge = self.bottom ? 20 : CompactPanelInset;
+    CGFloat edge = self.bottom ? BottomPanelInset : CompactPanelInset;
     CGFloat control = OCToolbarHeight, gap = 8;
     CGFloat barY = h - edge - control;
     CGFloat buttonX = w - edge - control;
     CGFloat footerY = self.bottom ? 15 : 11;
-    CGFloat resultsBottom = footerY + 25;
-    CGFloat resultsTop = barY - 10;
+    CGFloat resultsBottom = footerY + FooterHeight;
+    CGFloat resultsTop = barY - ResultsTopGap;
     CGFloat resultsHeight = MAX(35,resultsTop-resultsBottom);
     __weak OCPicker *weakSelf = self;
 
@@ -319,6 +392,10 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
     self.tabs.selectedID = self.activeTab;
     self.tabs.onSelect = ^(int64_t identifier) { [weakSelf selectTab:identifier]; };
     self.tabs.onAdd = ^{ [weakSelf createCollection:nil]; };
+    self.tabs.onClickEmpty = ^{
+        OCPicker *picker = weakSelf;
+        [picker.panel makeFirstResponder:picker.results];
+    };
     self.tabs.onCommit = ^(int64_t identifier, NSString *name) {
         [weakSelf sendAction:identifier
             ? @{@"action":@"rename_collection",@"id":@(identifier),@"name":name}
@@ -339,24 +416,14 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
         resultsHeight) inView:view horizontal:self.bottom];
     self.results = (OCResults *)self.scroll.documentView;
 
-    CGFloat hintsWidth = w >= 370 ? 226 : 0;
     self.status = OCLabel(self.recordingStatus ?: @"", 11, NSFontWeightMedium);
     self.status.textColor = NSColor.secondaryLabelColor;
-    self.status.frame = NSMakeRect(edge+2,footerY,w-2*edge-hintsWidth-8,16);
-    self.statusWidth = NSWidth(self.status.frame);
-    self.statusWarning = NO;
+    self.status.frame = NSMakeRect(edge+2,footerY,w-2*edge-2,16);
     [view addSubview:self.status];
 
-    self.shortcutHints = nil;
-    if (hintsWidth) {
-        self.shortcutHints = OCLabel(@"",11,NSFontWeightMedium);
-        self.shortcutHints.textColor = NSColor.secondaryLabelColor;
-        self.shortcutHints.alignment = NSTextAlignmentRight;
-        self.shortcutHints.frame = NSMakeRect(w-edge-hintsWidth,footerY,hintsWidth,16);
-        [view addSubview:self.shortcutHints];
-    }
-
     self.undoButton = [self makeUndoButtonIn:view right:w-edge y:footerY-4];
+    self.undoButton.hidden = YES;
+    self.status.hidden = YES;
     [self refreshUndoControls];
     [self setMessage:self.recordingStatus];
     self.results.picked = ^(NSInteger index, OCResultAction action) {
@@ -365,6 +432,9 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
     self.results.contextMenu = ^NSMenu *(NSInteger index) {
         OCPicker *picker = weakSelf;
         return picker ? [picker contextFor:picker.results.rows[(NSUInteger)index]] : nil;
+    };
+    self.results.prepareDrag = ^(NSArray<NSDictionary *> *rows) {
+        [weakSelf prepareDragForRows:rows];
     };
     self.scrollObserver = [self observeScroll:self.scroll];
 }
@@ -425,10 +495,8 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
                                      : [[NSScrollView alloc] initWithFrame:rect];
     scroll.drawsBackground = NO;
     scroll.borderType = NSNoBorder;
-    scroll.hasVerticalScroller = !horizontal;
-    scroll.hasHorizontalScroller = horizontal;
-    scroll.autohidesScrollers = YES;
-    scroll.scrollerStyle = NSScrollerStyleOverlay;
+    scroll.hasVerticalScroller = NO;
+    scroll.hasHorizontalScroller = NO;
     OCResults *canvas = [[OCResults alloc] initWithFrame:NSMakeRect(0,0,NSWidth(rect),NSHeight(rect))];
     canvas.horizontal = horizontal;
     canvas.images = self.images;
@@ -456,7 +524,7 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
     self.mouseMonitor = [NSEvent addGlobalMonitorForEventsMatchingMask:click handler:^(__unused NSEvent *event) {
         [weakSelf dismissRestoringFocus:NO];
     }];
-    self.appMouseMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:click | NSEventMaskLeftMouseUp
+    self.appMouseMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:click | NSEventMaskLeftMouseUp | NSEventMaskLeftMouseDragged
         handler:^NSEvent *(NSEvent *event) {
         OCPicker *picker = weakSelf;
         if (!picker) return event;
@@ -464,10 +532,22 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
             [picker dismissRestoringFocus:NO];
             return event;
         }
-        if (event.type != NSEventTypeLeftMouseDown && event.type != NSEventTypeLeftMouseUp) return event;
+        if (event.type == NSEventTypeLeftMouseDragged || event.type == NSEventTypeLeftMouseUp) {
+            OCResults *results = picker.results;
+            if (![results hasPointerGesture]) return event;
+            if (event.type == NSEventTypeLeftMouseDragged) {
+                if (event.window == picker.panel) [results mouseDragged:event];
+            } else {
+                [picker clearPendingDrag];
+                [results mouseUp:event.window == picker.panel ? event : nil];
+            }
+            return nil;
+        }
+        if (event.type != NSEventTypeLeftMouseDown) return event;
         OCResults *results = event.window == picker.panel ? picker.results : nil;
         if (![results containsPickerClick:event]) return event;
-        if (event.type == NSEventTypeLeftMouseDown) [results mouseDown:event];
+        [picker clearPendingDrag];
+        [results mouseDown:event];
         return nil;
     }];
     self.resignObserver = [NSNotificationCenter.defaultCenter addObserverForName:NSApplicationDidResignActiveNotification
@@ -485,7 +565,13 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
 }
 
 - (void)dismissRestoringFocus:(BOOL)restore {
-    if (!self.panel) return;
+    [self dismissRestoringFocus:restore animate:YES];
+}
+
+- (void)dismissRestoringFocus:(BOOL)restore animate:(BOOL)animate {
+    NSPanel *panel = self.panel;
+    if (!panel) return;
+    [self clearPendingDrag];
     if (self.keyMonitor) [NSEvent removeMonitor:self.keyMonitor];
     if (self.mouseMonitor) [NSEvent removeMonitor:self.mouseMonitor];
     if (self.appMouseMonitor) [NSEvent removeMonitor:self.appMouseMonitor];
@@ -498,18 +584,37 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
     self.resignObserver = nil;
     self.workspaceObserver = nil;
     self.scrollObserver = nil;
+    self.preview.animates = NO;
     [self clearPreview];
     NSRunningApplication *origin = self.origin;
-    [self.panel orderOut:nil];
     self.tabs = nil;
     self.panel = nil;
     self.origin = nil;
     self.panelToken++;
     self.catalogTicket++;
     self.results = nil;
+    self.scroll = nil;
+    self.status = nil;
     self.undoButton = nil;
     [self.images removeAllObjects];
     [self.requested removeAllObjects];
+    if (animate && self.bottom && !NSWorkspace.sharedWorkspace.accessibilityDisplayShouldReduceMotion) {
+        // The closing window is visual only. A subsequent shortcut can open a new picker immediately.
+        panel.ignoresMouseEvents = YES;
+        self.closingPanel = panel;
+        NSRect frame = panel.frame;
+        NSScreen *screen = panel.screen ?: ScreenAt(frame.origin);
+        CGFloat restingY = NSMinY(screen.visibleFrame) + BottomScreenInset;
+        frame.origin.y = MIN(NSMinY(frame),restingY) - BottomPanelExitDistance;
+        __weak OCPicker *weakSelf = self;
+        AnimatePanel(panel,frame,0,BottomPanelExitDuration,^{
+            [panel orderOut:nil];
+            OCPicker *picker = weakSelf;
+            if (picker.closingPanel == panel) picker.closingPanel = nil;
+        });
+    } else {
+        [panel orderOut:nil];
+    }
     if (restore && NSApp.isActive && origin && !origin.terminated &&
         origin.processIdentifier != NSProcessInfo.processInfo.processIdentifier &&
         NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier != origin.processIdentifier) {
@@ -520,20 +625,54 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
 
 - (void)fetchCatalog {
     if (!self.panel) return;
-    uint64_t ticket = self.catalogTicket + 1;
-    if (OCSend(@{@"action":@"catalog", @"ticket":@(ticket),
-        @"query":self.search.stringValue ?: @"", @"kind":@"", @"collection":@(self.activeTab)})) {
-        self.catalogTicket = ticket;
-    } else {
-        [self setWarning:@"Riwayat sedang sibuk. Coba lagi."];
+    uint64_t ticket = ++self.catalogTicket;
+    if (self.catalogFailed && !self.results.rows.count) {
+        [self.results showEmptyTitle:nil detail:nil announce:NO];
+        [self.results layoutRows];
     }
+    self.catalogPending = YES;
+    self.catalogFailed = NO;
+    if (!OCSend(@{@"action":@"catalog", @"ticket":@(ticket),
+        @"query":self.search.stringValue ?: @"", @"kind":@"", @"collection":@(self.activeTab)})) {
+        [self catalogDidFail];
+        return;
+    }
+    if (!self.results.rows.count) {
+        __weak OCPicker *weakSelf = self;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 120 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+            OCPicker *picker = weakSelf;
+            if (picker.catalogTicket != ticket || !picker.catalogPending || picker.results.rows.count) return;
+            [picker.results showEmptyTitle:@"Memuat klip…" detail:nil announce:NO];
+            [picker.results layoutRows];
+        });
+    }
+}
+
+- (void)catalogDidFail {
+    self.catalogPending = NO;
+    self.catalogFailed = YES;
+    if (self.results.actionsSuspended) self.results.rows = @[];
+    if (!self.results.rows.count) {
+        [self.results showEmptyTitle:@"Riwayat gagal dimuat" detail:@"Tekan Enter untuk mencoba lagi." announce:YES];
+        [self.results layoutRows];
+    } else {
+        [self setWarning:@"Riwayat gagal diperbarui."];
+    }
+}
+
+- (void)suspendResultActions {
+    [self clearPendingDrag];
+    self.results.actionsSuspended = YES;
+    self.results.selected = -1;
+    [self.results showEmptyTitle:nil detail:nil announce:NO];
+    [self.results layoutRows];
 }
 
 - (void)controlTextDidChange:(NSNotification *)notification {
     if (notification.object != self.activeSearch) return;
     [(OCToolbarSearchField *)notification.object refreshClearButton];
     [self clearPreview];
-    self.activeResults.selected = -1;
+    [self suspendResultActions];
     self.searchStarted = NSProcessInfo.processInfo.systemUptime;
     [self fetchCatalog];
 }
@@ -575,13 +714,19 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
         else [self fetchCatalog];
     } else if ([kind isEqualToString:@"error"]) {
         NSString *reason = event[@"reason"];
+        [self clearPendingDrag];
         self.payloadMode = OCIdle;
         NSString *description = @{@"full":@"Ruang penyimpanan tidak cukup.",
             @"missing":@"Klip ini sudah tidak tersedia.", @"collection_name":@"Nama koleksi kosong, terlalu panjang, atau sudah dipakai.",
             @"collection_missing":@"Koleksi sudah tidak tersedia.",
             @"not_manually_sensitive":@"Klip ini ditandai oleh deteksi otomatis."}[reason];
         [self setWarning:description ?: @"Tindakan gagal. Coba lagi."];
+    } else if ([kind isEqualToString:@"catalog_failed"]) {
+        if ([event[@"ticket"] unsignedLongLongValue] == self.catalogTicket) [self catalogDidFail];
     } else if ([kind isEqualToString:@"catalog"] && [event[@"ticket"] unsignedLongLongValue] == self.catalogTicket) {
+        self.catalogPending = NO;
+        self.catalogFailed = NO;
+        self.results.actionsSuspended = NO;
         NSDictionary *catalog = event[@"catalog"];
         NSArray *nextCollections = catalog[@"collections"] ?: @[];
         self.collections = nextCollections;
@@ -626,7 +771,6 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
     if (self.revealed && ![previous isEqual:(index < 0 ? nil : rows[(NSUInteger)index][@"id"])]) {
         [self clearPreview];
     }
-    [self refreshSelectionHint:result];
     [result showEmptyTitle:title detail:detail announce:announce];
     [result layoutRows];
     if (index >= 0 && ![previous isEqual:rows[(NSUInteger)index][@"id"]])
@@ -634,19 +778,11 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
     NSAccessibilityPostNotification(result, NSAccessibilityLayoutChangedNotification);
 }
 
-- (void)refreshSelectionHint:(OCResults *)results {
-    if (results != self.results) return;
-    NSUInteger count = results.selectedIndexes.count;
-    self.shortcutHints.stringValue = !count ? @""
-        : count > 1 ? [NSString stringWithFormat:@"%lu dipilih    ↵ Tempel 1    ⌫ Hapus",(unsigned long)count]
-        : self.activePanel.firstResponder == results ? @"Spasi Pratinjau    ↵ Tempel    ⌫ Hapus"
-        : @"Spasi Pratinjau    ↵ Tempel";
-}
-
 - (NSDictionary *)collectionRowForID:(int64_t)identifier {
     for (NSDictionary *collection in self.collections) {
         if ([collection[@"id"] longLongValue] == identifier)
-            return @{@"id":collection[@"id"],@"title":collection[@"name"] ?: @"",@"kind":@"koleksi"};
+            return @{@"id":collection[@"id"],@"title":collection[@"name"] ?: @"",@"kind":@"koleksi",
+                     @"color":collection[@"color"] ?: @""};
     }
     return nil;
 }
@@ -659,7 +795,11 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
 }
 
 - (void)selectTab:(int64_t)collectionID {
-    if (!self.panel || collectionID == self.activeTab) return;
+    if (!self.panel) return;
+    if (collectionID == self.activeTab) {
+        if (self.catalogFailed) [self fetchCatalog];
+        return;
+    }
     [self clearPreview];
     self.activeTab = collectionID;
     self.revealTab = YES;
@@ -667,9 +807,7 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
     [self refreshTabState];
     [self.tabs scrollSelectedToVisible];
     self.results.rows = @[];
-    self.results.selected = -1;
-    [self.results showEmptyTitle:nil detail:nil announce:NO];
-    [self.results layoutRows];
+    [self suspendResultActions];
     [self.panel makeFirstResponder:self.results];
     [self fetchCatalog];
 }
@@ -693,13 +831,12 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
 }
 
 - (void)pick:(NSInteger)index in:(OCResults *)canvas action:(OCResultAction)action {
-    if (index < 0 || (NSUInteger)index >= canvas.rows.count) return;
+    if (canvas.actionsSuspended || index < 0 || (NSUInteger)index >= canvas.rows.count) return;
     if (index != canvas.selected || action == OCResultExtendSelection || action == OCResultToggleSelection)
         [self clearPreview];
     if (action == OCResultExtendSelection) [canvas extendSelectionTo:index];
     else if (action == OCResultToggleSelection) [canvas toggleSelectionAt:index];
     else canvas.selected = index;
-    [self refreshSelectionHint:canvas];
     [canvas scrollRectToVisible:[canvas rowFrame:index]];
     if (action == OCResultConfirm) [self useSelected:OCPaste];
 }
@@ -718,9 +855,24 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
     NSButton *button = self.undoButton;
     if (!available && button.window.firstResponder == button)
         [button.window makeFirstResponder:self.results.rows.count ? self.results : self.search];
+    BOOL appeared = available && button.hidden;
     button.hidden = !available;
     button.enabled = !self.undoPending;
-    self.shortcutHints.hidden = available || self.statusWarning;
+    if (appeared && self.panel.visible) FadeInFeedback(button);
+    [self updateStatusLayout];
+}
+
+- (void)updateStatusLayout {
+    NSTextField *label = self.status;
+    if (!label) return;
+    BOOL hasText = label.stringValue.length > 0;
+    BOOL appeared = hasText && label.hidden;
+    label.hidden = !hasText;
+    NSRect frame = label.frame;
+    CGFloat edge = NSMinX(frame)-2;
+    frame.size.width = MAX(0,NSWidth(label.superview.bounds)-2*edge-2-(self.undoButton.hidden ? 0 : 96));
+    label.frame = frame;
+    if (appeared && self.panel.visible) FadeInFeedback(label);
 }
 
 - (void)undoDelete:(id)sender {
@@ -778,17 +930,7 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
         NSAccessibilityPostNotificationWithUserInfo(label,NSAccessibilityAnnouncementRequestedNotification,
             @{NSAccessibilityAnnouncementKey:text,NSAccessibilityPriorityKey:@(NSAccessibilityPriorityHigh)});
     }
-    if (label == self.status) {
-        // A warning needs the room the shortcut hints normally take.
-        self.statusWarning = warning;
-        CGFloat edge = NSMinX(label.frame) - 2;
-        CGFloat undoRoom = self.undoButton.hidden ? 0 : 96;
-        NSRect frame = label.frame;
-        frame.size.width = warning && self.shortcutHints
-            ? NSWidth(label.superview.bounds) - 2*edge - 2 - undoRoom : self.statusWidth;
-        label.frame = frame;
-        self.shortcutHints.hidden = warning || self.undoTicket != 0;
-    }
+    [self updateStatusLayout];
 }
 
 - (void)sendAction:(NSDictionary *)request {
@@ -822,17 +964,50 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
             NSImage *image = [[NSImage alloc] initWithData:data];
             if (image) {
                 self.images[identifier] = image;
-                self.activeResults.needsDisplay = YES;
+                [self.activeResults invalidateClip:identifier];
             }
             break;
         }
     }
 }
 
+- (void)clearPendingDrag {
+    self.dragClips = nil;
+    self.dragItems = nil;
+    self.results.preparingDrag = NO;
+}
+
+- (void)prepareDragForRows:(NSArray<NSDictionary *> *)rows {
+    for (NSDictionary *row in rows) {
+        if ([row[@"sensitive"] boolValue]) {
+            [self setWarning:@"Item sensitif tidak dapat diseret."];
+            return;
+        }
+    }
+    NSMutableDictionary<NSNumber *, NSNumber *> *clips = [NSMutableDictionary dictionary];
+    for (NSDictionary *row in rows) {
+        NSNumber *ticket = @(++self.nextPayloadTicket);
+        NSNumber *identifier = row[@"id"];
+        if (!OCSend(@{@"action":@"payload",@"id":identifier,@"ticket":ticket})) {
+            [self setWarning:@"Riwayat sedang sibuk. Coba lagi."];
+            return;
+        }
+        clips[ticket] = identifier;
+    }
+    self.dragClips = clips;
+    self.dragItems = [NSMutableDictionary dictionary];
+    __weak OCPicker *weakSelf = self;
+    NSDictionary *request = self.dragClips;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 120 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+        OCPicker *picker = weakSelf;
+        if (picker.dragClips == request) picker.results.preparingDrag = YES;
+    });
+}
+
 - (void)useSelected:(OCPayloadMode)mode {
     OCResults *canvas = self.activeResults;
     NSDictionary *row = [self selectedIn:canvas];
-    if (!row) return;
+    if (!row || canvas.actionsSuspended) return;
     int64_t identifier = [row[@"id"] longLongValue];
     if (mode == OCPaste) {
         if ([row[@"sensitive"] boolValue] && self.revealed != identifier) {
@@ -843,7 +1018,7 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
         if (CGPreflightPostEventAccess() && ![self canPasteToOrigin]) return;
     }
     self.payloadMode = mode;
-    uint64_t ticket = ++self.payloadTicket;
+    uint64_t ticket = self.payloadTicket = ++self.nextPayloadTicket;
     if (!OCSend(@{@"action":@"payload",@"id":@(identifier),@"ticket":@(ticket)})) {
         self.payloadMode = OCIdle;
         [self setWarning:@"Riwayat sedang sibuk. Coba lagi."];
@@ -852,6 +1027,24 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
 
 - (void)receivePayload:(NSArray<NSDictionary *> *)parts ticket:(uint64_t)ticket
                     id:(int64_t)clip sensitive:(BOOL)sensitive {
+    NSNumber *dragTicket = @(ticket);
+    if ([self.dragClips[dragTicket] isEqual:@(clip)]) {
+        NSArray<NSPasteboardItem *> *items = sensitive ? nil : OCPasteboardItems(parts);
+        if (!items.count) {
+            [self clearPendingDrag];
+            [self setWarning:sensitive ? @"Item sensitif tidak dapat diseret." : @"Klip gagal disiapkan untuk diseret."];
+            return;
+        }
+        self.dragItems[dragTicket] = items;
+        if (self.dragItems.count == self.dragClips.count) {
+            NSMutableArray<NSPasteboardItem *> *selection = [NSMutableArray array];
+            for (NSNumber *key in [self.dragClips.allKeys sortedArrayUsingSelector:@selector(compare:)])
+                [selection addObjectsFromArray:self.dragItems[key]];
+            [self clearPendingDrag];
+            [self.results beginPreparedDrag:selection];
+        }
+        return;
+    }
     if (!self.panel || self.payloadMode == OCIdle || ticket != self.payloadTicket ||
         [[self selectedIn:self.activeResults][@"id"] longLongValue] != clip) return;
     OCPayloadMode mode = self.payloadMode;
@@ -868,7 +1061,7 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
         NSRunningApplication *destination = self.origin;
         NSScreen *screen = self.activePanel.screen;
         if (self.didWriteClipboard) self.didWriteClipboard();
-        [self dismissRestoringFocus:YES];
+        [self dismissRestoringFocus:YES animate:!direct];
         if (!direct) {
             // No permission to send ⌘V: the clip is on the clipboard, so tell the user to paste it.
             [self showToast:OCAccessibilityReady() ? @"Disalin. Tekan ⌘V untuk menempel."
@@ -925,10 +1118,22 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
     __weak OCPicker *weakSelf = self;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2800 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
         OCPicker *picker = weakSelf;
-        if (picker && picker.toastTicket == ticket) {
-            [picker.toast orderOut:nil];
+        if (!picker || picker.toastTicket != ticket) return;
+        NSPanel *visibleToast = picker.toast;
+        if (NSWorkspace.sharedWorkspace.accessibilityDisplayShouldReduceMotion) {
+            [visibleToast orderOut:nil];
             picker.toast = nil;
+            return;
         }
+        [NSAnimationContext runAnimationGroup:^(NSAnimationContext *context) {
+            context.duration = FeedbackFadeDuration;
+            context.timingFunction = [CAMediaTimingFunction functionWithControlPoints:0.23 :1 :0.32 :1];
+            visibleToast.animator.alphaValue = 0;
+        } completionHandler:^{
+            [visibleToast orderOut:nil];
+            OCPicker *currentPicker = weakSelf;
+            if (currentPicker.toast == visibleToast) currentPicker.toast = nil;
+        }];
     });
 }
 
@@ -1013,7 +1218,7 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
         [view addSubview:scroll];
     }
     self.preview = [NSPopover new];
-    self.preview.animates = NO;
+    self.preview.animates = !NSWorkspace.sharedWorkspace.accessibilityDisplayShouldReduceMotion;
     self.preview.behavior = NSPopoverBehaviorTransient;
     self.preview.delegate = self;
     self.preview.contentViewController = controller;
@@ -1023,12 +1228,18 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
         [self setMessage:@"Item sensitif terbuka. Enter menempelkan klip."];
     }
     OCResults *results = self.activeResults;
-    [self.preview showRelativeToRect:[results rowFrame:results.selected] ofView:results
+    NSRect clipRect = [results rowFrame:results.selected];
+    if (!NSIntersectsRect(clipRect, results.visibleRect)) [results scrollRectToVisible:clipRect];
+    NSRect visibleClip = NSIntersectionRect(clipRect, results.visibleRect);
+    [self.preview showRelativeToRect:visibleClip ofView:results
                       preferredEdge:self.bottom ? NSRectEdgeMaxY : NSRectEdgeMaxX];
 }
 
 - (void)clearPreview {
-    if (self.revealed) [self setMessage:self.recordingStatus];
+    if (self.revealed) {
+        self.preview.animates = NO;
+        [self setMessage:self.recordingStatus];
+    }
     self.payloadTicket++;
     self.payloadMode = OCIdle;
     self.revealed = 0;
@@ -1038,6 +1249,7 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
 }
 
 - (void)popoverDidClose:(NSNotification *)notification {
+    if (notification.object != self.preview) return;
     [self clearPreview];
     [self setMessage:self.recordingStatus];
 }
@@ -1070,6 +1282,7 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
     BOOL composing = [editor isKindOfClass:NSTextView.class] && [(NSTextView *)editor hasMarkedText];
     BOOL emptySearch = searchFocused && !composing && !(editor ? editor.string.length : search.stringValue.length);
     BOOL preview = self.preview.shown;
+    BOOL previewPending = self.payloadMode == OCPreview;
     BOOL horizontalArrow = results.horizontal && (key == kVK_LeftArrow || key == kVK_RightArrow);
     NSButton *undoButton = self.undoButton;
 
@@ -1103,7 +1316,6 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
     if (resultFocused && !preview && event.window == window &&
         !(flags & (NSEventModifierFlagCommand | NSEventModifierFlagControl)) &&
         [self focusSearchForTyping:event inWindow:window field:search]) {
-        [self refreshSelectionHint:results];
         return event;
     }
     if (flags == NSEventModifierFlagOption && horizontalArrow && !composing && !preview &&
@@ -1121,15 +1333,15 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
         return nil;
     }
     if (!flags && key == kVK_Space &&
-        (preview || ((resultFocused || emptySearch) && results.selected >= 0))) {
+        (preview || ((resultFocused || emptySearch) && (previewPending || results.selected >= 0)))) {
         if (!event.isARepeat) {
-            if (preview) [self clearPreview];
+            if (preview || previewPending) [self clearPreview];
             else [self useSelected:OCPreview];
         }
         return nil;
     }
     if (key == kVK_Escape) {
-        if (preview) [self clearPreview];
+        if (preview || previewPending) [self clearPreview];
         else [self dismissRestoringFocus:YES];
         return nil;
     }
@@ -1153,19 +1365,22 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
         NSInteger step = flags & NSEventModifierFlagShift ? -1 : 1;
         NSInteger next = ((NSInteger)order.count + (NSInteger)index + step) % (NSInteger)order.count;
         [window makeFirstResponder:order[(NSUInteger)next]];
-        [self refreshSelectionHint:results];
         return nil;
     }
     if (key == kVK_Return || key == kVK_ANSI_KeypadEnter) {
         if (preview) { [self useSelected:OCPaste]; return nil; }
-        if (focused == self.tabs) return nil;
+        if (focused == self.tabs) {
+            if (self.catalogFailed) [self fetchCatalog];
+            return nil;
+        }
         if (focused == self.action || (undoButton && focused == undoButton)) {
             [(NSButton *)focused performClick:nil];
             return nil;
         }
         if (searchFocused && composing) return event;
         if (searchFocused || resultFocused) {
-            [self pick:results.selected in:results confirm:YES];
+            if (self.catalogFailed && (results.actionsSuspended || !results.rows.count)) [self fetchCatalog];
+            else [self pick:results.selected in:results confirm:YES];
             return nil;
         }
     }
@@ -1174,8 +1389,8 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
         return nil;
     }
     BOOL extend = flags == NSEventModifierFlagShift &&
-        (key == kVK_UpArrow || key == kVK_DownArrow);
-    if (results.rows.count && (!flags || extend)) {
+        (key == kVK_UpArrow || key == kVK_DownArrow || horizontalArrow);
+    if (!results.actionsSuspended && results.rows.count && (!flags || extend)) {
         BOOL downFromSearch = searchFocused && !composing && key == kVK_DownArrow;
         BOOL horizontalFromSearch = horizontalArrow && emptySearch && !preview;
         BOOL previous = key == kVK_UpArrow || (horizontalArrow && key == kVK_LeftArrow);
@@ -1273,6 +1488,21 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
 
 - (void)addCollectionActionsFor:(NSDictionary *)row toMenu:(NSMenu *)menu {
     [menu addItem:[self item:@"Ubah nama…" action:@selector(renameCollection:) value:row]];
+    NSMenu *colors = [[NSMenu alloc] initWithTitle:@"Warna"];
+    NSNumber *identifier = row[@"id"];
+    NSString *current = row[@"color"] ?: @"";
+    NSMutableArray<NSDictionary *> *choices = [NSMutableArray arrayWithObject:@{@"key":@"",@"title":@"Otomatis"}];
+    [choices addObjectsFromArray:OCTabPalette()];
+    for (NSDictionary *choice in choices) {
+        NSMenuItem *item = [self item:choice[@"title"] action:@selector(runMenuAction:)
+            value:@{@"action":@"set_collection_color",@"id":identifier,@"color":choice[@"key"]}];
+        SetCollectionColorDot(item,choice[@"key"],identifier.longLongValue);
+        item.state = [choice[@"key"] isEqualToString:current] ? NSControlStateValueOn : NSControlStateValueOff;
+        [colors addItem:item];
+    }
+    NSMenuItem *colorItem = [[NSMenuItem alloc] initWithTitle:@"Warna" action:nil keyEquivalent:@""];
+    colorItem.submenu = colors;
+    [menu addItem:colorItem];
     [menu addItem:[self item:@"Hapus koleksi…" action:@selector(deleteCollection:) value:row]];
 }
 
@@ -1296,6 +1526,7 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
             BOOL member = [row[@"collections"] containsObject:collectionID];
             NSMenuItem *choice = [self item:collection[@"name"] action:@selector(runMenuAction:)
                 value:@{@"action":@"membership",@"id":identifier,@"collection":collectionID,@"add":(member ? @NO : @YES)}];
+            SetCollectionColorDot(choice,collection[@"color"],collectionID.longLongValue);
             choice.state = member ? NSControlStateValueOn : NSControlStateValueOff;
             [collections addItem:choice];
         }

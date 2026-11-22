@@ -48,7 +48,7 @@ void OCConfirmClearHistory(NSWindow *window, BOOL all, dispatch_block_t confirm)
 @property(nonatomic, strong) NSTextField *shortcutValue;
 @property(nonatomic, strong) NSTextField *shortcutFeedback;
 @property(nonatomic, strong) NSButton *shortcutCapture;
-@property(nonatomic, strong) NSPopUpButton *mode;
+@property(nonatomic, copy) NSArray<NSButton *> *modeButtons;
 @property(nonatomic, strong) NSButton *loginButton;
 @property(nonatomic, strong) NSTextField *loginStatus;
 @property(nonatomic, strong) NSTextField *historyStatus;
@@ -134,6 +134,60 @@ static NSTextField *PlaceLabel(NSView *view, NSString *title, NSRect rect, BOOL 
     [[NSColor.labelColor colorWithAlphaComponent:0.075] setStroke];
     shape.lineWidth = 0.8;
     [shape stroke];
+}
+@end
+
+static void FillPreviewShape(NSRect rect, CGFloat radius, NSColor *color) {
+    [color setFill];
+    [[NSBezierPath bezierPathWithRoundedRect:rect xRadius:radius yRadius:radius] fill];
+}
+
+@interface OCModePreview : NSView
+@property(nonatomic) BOOL bottom;
+@property(nonatomic, weak) NSButton *modeButton;
+- (void)selectMode:(NSClickGestureRecognizer *)gesture;
+@end
+
+@implementation OCModePreview
+- (void)selectMode:(NSClickGestureRecognizer *)gesture {
+    [self.modeButton performClick:nil];
+}
+
+- (void)resetCursorRects {
+    [self addCursorRect:self.bounds cursor:NSCursor.pointingHandCursor];
+}
+
+- (void)drawRect:(NSRect)dirtyRect {
+    NSRect screen = NSInsetRect(self.bounds,0.5,0.5);
+    NSBezierPath *outline = [NSBezierPath bezierPathWithRoundedRect:screen xRadius:8 yRadius:8];
+    [[NSColor.labelColor colorWithAlphaComponent:0.045] setFill];
+    [outline fill];
+    [[NSColor.labelColor colorWithAlphaComponent:0.16] setStroke];
+    outline.lineWidth = 1;
+    [outline stroke];
+
+    NSColor *line = [NSColor.labelColor colorWithAlphaComponent:0.19];
+    NSColor *panel = [NSColor.labelColor colorWithAlphaComponent:0.12];
+    NSColor *selection = [NSColor.controlAccentColor colorWithAlphaComponent:0.38];
+    CGFloat middle = NSMidX(screen);
+    CGFloat firstLineY = NSHeight(self.bounds)-9;
+    for (NSInteger row = 0; row < 2; row++) {
+        FillPreviewShape(NSMakeRect(middle-48,firstLineY-row*8,70-row*17,2),1,line);
+    }
+    if (self.bottom) {
+        NSRect tray = NSMakeRect(8,7,NSWidth(self.bounds)-16,27);
+        FillPreviewShape(tray,5,panel);
+        CGFloat cardWidth = (NSWidth(tray)-23)/4;
+        for (NSInteger card = 0; card < 4; card++) {
+            FillPreviewShape(NSMakeRect(13+card*(cardWidth+4),12,cardWidth,17),3,card == 0 ? selection : line);
+        }
+    } else {
+        FillPreviewShape(NSMakeRect(middle+7,firstLineY-11,1.5,8),0.75,NSColor.controlAccentColor);
+        FillPreviewShape(NSMakeRect(middle+7,7,67,27),5,panel);
+        FillPreviewShape(NSMakeRect(middle+12,25,57,5),2,selection);
+        FillPreviewShape(NSMakeRect(middle+12,18,41,3),1.5,line);
+        FillPreviewShape(NSMakeRect(middle+12,12,34,3),1.5,line);
+    }
 }
 @end
 
@@ -425,29 +479,44 @@ static void SettingsTitle(NSView *pane, NSString *title) {
 
 - (void)buildGeneral:(NSView *)view {
     SettingsTitle(view, @"Umum");
-    SettingsGroup(view,211,76);
-    SettingsGroup(view,129,66);
-    SettingsGroup(view,31,82);
+    SettingsGroup(view,223,76);
+    SettingsGroup(view,82,130);
+    SettingsGroup(view,8,63);
 
-    PlaceLabel(view, @"Shortcut global", NSMakeRect(15,250,154,20), NO);
-    self.shortcutValue = PlaceLabel(view, @"", NSMakeRect(159,249,94,23), NO);
+    PlaceLabel(view, @"Shortcut global", NSMakeRect(15,262,154,20), NO);
+    self.shortcutValue = PlaceLabel(view, @"", NSMakeRect(159,261,94,23), NO);
     self.shortcutValue.font = [NSFont monospacedSystemFontOfSize:15 weight:NSFontWeightSemibold];
-    self.shortcutCapture = PlaceButton(view, @"Ubah…", self, @selector(captureShortcut:), NSMakeRect(244,242,86,32));
-    PlaceButton(view, @"Pulihkan bawaan", self, @selector(resetShortcut:), NSMakeRect(336,242,130,32));
-    self.shortcutFeedback = PlaceLabel(view, ShortcutHelp, NSMakeRect(15,221,450,18), YES);
+    self.shortcutCapture = PlaceButton(view, @"Ubah…", self, @selector(captureShortcut:), NSMakeRect(244,254,86,32));
+    PlaceButton(view, @"Pulihkan bawaan", self, @selector(resetShortcut:), NSMakeRect(336,254,130,32));
+    self.shortcutFeedback = PlaceLabel(view, ShortcutHelp, NSMakeRect(15,233,450,18), YES);
 
-    PlaceLabel(view, @"Tampilan clipboard", NSMakeRect(15,151,192,21), NO);
-    self.mode = OCGlassPopup(NSMakeRect(237,144,226,36), view);
-    [self.mode addItemsWithTitles:@[@"Dekat kursor teks", @"Panel bawah layar"]];
-    [self.mode selectItemAtIndex:[NSUserDefaults.standardUserDefaults boolForKey:BottomMode] ? 1 : 0];
-    self.mode.target = self;
-    self.mode.action = @selector(changeMode:);
+    PlaceLabel(view, @"Tampilan clipboard", NSMakeRect(18,181,192,20), NO).font =
+        [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold];
+    BOOL bottomMode = [NSUserDefaults.standardUserDefaults boolForKey:BottomMode];
+    NSMutableArray<NSButton *> *modeButtons = [NSMutableArray array];
+    NSArray<NSString *> *titles = @[@"Dekat kursor teks", @"Panel bawah layar"];
+    for (NSInteger mode = 0; mode < (NSInteger)titles.count; mode++) {
+        CGFloat x = 18+mode*232;
+        NSButton *button = [NSButton radioButtonWithTitle:titles[(NSUInteger)mode] target:self action:@selector(changeMode:)];
+        button.frame = NSMakeRect(x,154,212,21);
+        button.tag = mode;
+        button.state = mode == bottomMode ? NSControlStateValueOn : NSControlStateValueOff;
+        [view addSubview:button];
+        [modeButtons addObject:button];
+
+        OCModePreview *preview = [[OCModePreview alloc] initWithFrame:NSMakeRect(x,94,212,52)];
+        preview.bottom = mode == 1;
+        preview.modeButton = button;
+        [preview addGestureRecognizer:[[NSClickGestureRecognizer alloc] initWithTarget:preview action:@selector(selectMode:)]];
+        [view addSubview:preview];
+    }
+    self.modeButtons = modeButtons;
 
     self.loginButton = [NSButton checkboxWithTitle:@"Jalankan saat login" target:self action:@selector(toggleLogin:)];
-    self.loginButton.frame = NSMakeRect(15,74,227,24);
+    self.loginButton.frame = NSMakeRect(15,38,227,24);
     [view addSubview:self.loginButton];
-    self.loginStatus = PlaceLabel(view, @"", NSMakeRect(33,48,236,19), YES);
-    PlaceButton(view, @"Buka Pengaturan Login", self, @selector(openLoginSettings:), NSMakeRect(261,58,202,30));
+    self.loginStatus = PlaceLabel(view, @"", NSMakeRect(33,17,236,19), YES);
+    PlaceButton(view, @"Buka Pengaturan Login", self, @selector(openLoginSettings:), NSMakeRect(261,24,202,30));
 }
 
 - (void)buildHistory:(NSView *)view {
@@ -628,8 +697,10 @@ static void SettingsTitle(NSView *pane, NSString *title) {
     [self applyShortcut:9 flags:12 label:@"⌘⇧V"];
 }
 
-- (void)changeMode:(NSPopUpButton *)sender {
-    [NSUserDefaults.standardUserDefaults setBool:sender.indexOfSelectedItem == 1 forKey:BottomMode];
+- (void)changeMode:(NSButton *)sender {
+    for (NSButton *button in self.modeButtons)
+        button.state = button == sender ? NSControlStateValueOn : NSControlStateValueOff;
+    [NSUserDefaults.standardUserDefaults setBool:sender.tag == 1 forKey:BottomMode];
 }
 
 - (void)refreshLogin {

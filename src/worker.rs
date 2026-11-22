@@ -70,6 +70,10 @@ enum Request {
         id: i64,
         name: String,
     },
+    SetCollectionColor {
+        id: i64,
+        color: String,
+    },
     DeleteCollection {
         id: i64,
     },
@@ -298,6 +302,7 @@ fn error_reason(error: Error) -> &'static str {
         Error::Missing => "missing",
         Error::CollectionName => "collection_name",
         Error::CollectionMissing => "collection_missing",
+        Error::CollectionColor => "collection_color",
         Error::Storage => "storage",
         Error::UndoUnavailable => "undo_unavailable",
         Error::UndoFull => "undo_full",
@@ -313,9 +318,15 @@ fn handle_request(history: &mut History, request: Request) -> Result<(), Error> 
             kind,
             collection,
         } => {
-            history.expire()?;
-            let catalog = history.catalog(&query, &kind, collection)?;
-            emit(json!({"kind":"catalog", "ticket":ticket, "catalog": catalog}));
+            match history
+                .expire()
+                .and_then(|_| history.catalog(&query, &kind, collection))
+            {
+                Ok(catalog) => emit(json!({"kind":"catalog", "ticket":ticket, "catalog":catalog})),
+                Err(error) => emit(
+                    json!({"kind":"catalog_failed", "ticket":ticket, "reason":error_reason(error)}),
+                ),
+            }
             return Ok(());
         }
         Request::Payload { ticket, id } => {
@@ -351,6 +362,7 @@ fn handle_request(history: &mut History, request: Request) -> Result<(), Error> 
             return Ok(());
         }
         Request::RenameCollection { id, name } => history.rename_collection(id, &name)?,
+        Request::SetCollectionColor { id, color } => history.set_collection_color(id, &color)?,
         Request::DeleteCollection { id } => history.delete_collection(id)?,
         Request::Membership {
             id,

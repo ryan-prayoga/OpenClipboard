@@ -118,8 +118,11 @@ static NSImage *GuideSymbol(NSString *name, CGFloat size) {
     self.dragIcon.onDrop = ^(NSPoint point) {
         OCAccessibilityGuide *guide = weakSelf;
         if (!guide.panel.visible || ![OCSystemSettingsWindowTracker isSettingsWindowAtPoint:point]) return;
-        [guide closeGuide:nil];
-        if (OCAccessibilityReady() && guide.permissionChanged) guide.permissionChanged();
+        if (OCAccessibilityReady()) {
+            [guide showSuccess];
+        } else {
+            guide.instructions.stringValue = @"Nyalakan sakelar OpenClipboard di daftar Aksesibilitas.";
+        }
     };
     [self.prompt addSubview:self.dragIcon];
 

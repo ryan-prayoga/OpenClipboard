@@ -3,6 +3,7 @@
 static CGFloat const CardWidth = 224;
 static CGFloat const CardStep = 237;
 static CGFloat const CardHeight = 208;
+static CGFloat const CardVerticalInset = 5;
 static CGFloat const PreviewHeight = 120;
 static CGFloat const CardInset = 12;
 static CGFloat const RowHeight = 47;
@@ -17,6 +18,32 @@ static NSString *KindIcon(NSString *kind) {
     return @{@"teks":@"text.alignleft", @"url":@"link", @"json":@"curlybraces",
         @"kode":@"chevron.left.forwardslash.chevron.right", @"warna":@"paintpalette",
         @"gambar":@"photo", @"sensitif":@"eye.slash"}[kind] ?: @"text.alignleft";
+}
+
+static NSURL *DragImageDirectory(void) {
+    NSString *path = [NSTemporaryDirectory() stringByAppendingPathComponent:@"OpenClipboard.XXXXXXXX"];
+    char *name = strdup(path.fileSystemRepresentation);
+    NSURL *directory = name && mkdtemp(name)
+        ? [NSURL fileURLWithFileSystemRepresentation:name isDirectory:YES relativeToURL:nil] : nil;
+    free(name);
+    return directory;
+}
+
+static void AddDragFile(NSPasteboardItem *item, NSUInteger number, NSURL **directory) {
+    NSData *png = [item dataForType:NSPasteboardTypePNG];
+    if (!png.length) {
+        NSData *tiff = [item dataForType:NSPasteboardTypeTIFF];
+        if (tiff.length) {
+            NSBitmapImageRep *image = [[NSBitmapImageRep alloc] initWithData:tiff];
+            png = [image representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+        }
+    }
+    if (!png.length) return;
+    if (!*directory) *directory = DragImageDirectory();
+    NSString *name = [NSString stringWithFormat:@"OpenClipboard-%lu.png",(unsigned long)number];
+    NSURL *file = [*directory URLByAppendingPathComponent:name isDirectory:NO];
+    if (file && [png writeToURL:file options:NSDataWritingAtomic error:nil])
+        [item setString:file.absoluteString forType:NSPasteboardTypeFileURL];
 }
 
 static NSDictionary *TextAttributes(NSFont *font, NSColor *color) {
@@ -131,7 +158,7 @@ static NSColor *Swatch(NSString *hex) {
 
 @implementation OCRowAccessibility
 - (BOOL)accessibilityPerformPress {
-    if (!self.results.picked) return NO;
+    if (self.results.actionsSuspended || !self.results.picked) return NO;
     self.results.picked(self.index, OCResultConfirm);
     return YES;
 }
@@ -140,7 +167,7 @@ static NSColor *Swatch(NSString *hex) {
 }
 @end
 
-@interface OCResults ()
+@interface OCResults () <NSDraggingSource>
 @property(nonatomic, copy, readwrite) NSIndexSet *selectedIndexes;
 @property(nonatomic) NSInteger selectionAnchor;
 @property(nonatomic, copy) NSArray<OCRowAccessibility *> *accessibleRows;
@@ -149,9 +176,24 @@ static NSColor *Swatch(NSString *hex) {
 @property(nonatomic, strong) NSNumber *lastClickID;
 @property(nonatomic) NSTimeInterval lastClickAt;
 @property(nonatomic) NSPoint lastClickPoint;
+@property(nonatomic, strong) NSNumber *pressedClipID;
+@property(nonatomic, strong) NSEvent *dragEvent;
+@property(nonatomic, strong) NSURL *dragImageDirectory;
+@property(nonatomic) NSPoint pressPoint;
+@property(nonatomic) OCResultAction deferredClick;
+@property(nonatomic) BOOL clickDeferred;
 @end
 
 @implementation OCResults
++ (CGFloat)cardViewportHeight {
+    return CardHeight + 2*CardVerticalInset;
+}
+
++ (CGFloat)compactViewportHeightWithin:(CGFloat)available {
+    CGFloat rows = MIN(7,floor((available-RowInset)/RowHeight));
+    return rows > 0 ? RowInset + rows*RowHeight : available;
+}
+
 - (instancetype)initWithFrame:(NSRect)frame {
     self = [super initWithFrame:frame];
     if (self) {
@@ -181,7 +223,7 @@ static NSColor *Swatch(NSString *hex) {
 
 - (NSRect)rowFrame:(NSInteger)index {
     if (index < 0 || (NSUInteger)index >= self.rows.count) return NSZeroRect;
-    if (self.horizontal) return NSMakeRect(3 + index * CardStep, 5, CardWidth, CardHeight);
+    if (self.horizontal) return NSMakeRect(3 + index * CardStep, CardVerticalInset, CardWidth, CardHeight);
     CGFloat top = RowInset + index * RowHeight;
     return NSMakeRect(3, top, MAX(0, self.bounds.size.width - 6), RowHeight - 3);
 }
@@ -209,6 +251,32 @@ static NSColor *Swatch(NSString *hex) {
         NSAccessibilityPostNotificationWithUserInfo(self.window,NSAccessibilityAnnouncementRequestedNotification,
             @{NSAccessibilityAnnouncementKey:message,NSAccessibilityPriorityKey:@(NSAccessibilityPriorityMedium)});
     }
+}
+
+- (void)invalidateClip:(NSNumber *)identifier {
+    if (!identifier) return;
+    NSUInteger index = [self.rows indexOfObjectPassingTest:^BOOL(NSDictionary *row, __unused NSUInteger index, __unused BOOL *stop) {
+        return [row[@"id"] isEqual:identifier];
+    }];
+    if (index != NSNotFound) [self setNeedsDisplayInRect:[self rowFrame:(NSInteger)index]];
+}
+
+- (void)setActionsSuspended:(BOOL)actionsSuspended {
+    if (_actionsSuspended == actionsSuspended) return;
+    _actionsSuspended = actionsSuspended;
+    self.lastClickID = nil;
+    if (actionsSuspended) {
+        self.pressedClipID = nil;
+        self.dragEvent = nil;
+        self.clickDeferred = NO;
+        NSAccessibilityPostNotification(self, NSAccessibilityLayoutChangedNotification);
+    }
+}
+
+- (void)setPreparingDrag:(BOOL)preparingDrag {
+    if (_preparingDrag == preparingDrag) return;
+    _preparingDrag = preparingDrag;
+    [self invalidateClip:self.pressedClipID];
 }
 
 - (NSArray<NSDictionary *> *)visibleRows {
@@ -325,6 +393,12 @@ static NSColor *Swatch(NSString *hex) {
         if (!NSIntersectsRect(rect, dirtyRect)) continue;
         [self drawEntry:self.rows[(NSUInteger)index] rect:rect selected:[self.selectedIndexes containsIndex:(NSUInteger)index]
                 lead:index == self.selected];
+        if (self.preparingDrag && [self.rows[(NSUInteger)index][@"id"] isEqual:self.pressedClipID]) {
+            NSBezierPath *outline = Rounded(NSInsetRect(rect,1,1), self.horizontal ? 17 : 11);
+            [[NSColor.controlAccentColor colorWithAlphaComponent:IncreaseContrast() ? 0.95 : 0.65] setStroke];
+            outline.lineWidth = 2;
+            [outline stroke];
+        }
     }
 }
 
@@ -389,12 +463,16 @@ static NSColor *Swatch(NSString *hex) {
     NSString *detail = imageSize ?: (host.length ? host : sensitive ? @"Spasi untuk membuka" : KindLabel(kind));
     DrawText(detail,NSMakeRect(left+39,center+2,MAX(0,right-left-95),16),11.5,
              NSFontWeightMedium,Secondary());
-    // A pinned clip keeps its time and shows the pin under it.
-    if (pinned) DrawImage(Symbol(@"pin"),NSMakeRect(right-12,center+4,11,11));
+    CGFloat timeTop = pinned ? center-15 : center-7;
+    NSRect timeRect = NSMakeRect(right-56,timeTop,56,16);
+    if (pinned) {
+        CGFloat pinTop = sensitive ? center-5.5 : NSMaxY(timeRect)+3;
+        DrawImage(Symbol(@"pin"),NSMakeRect(right-11,pinTop,11,11));
+    }
     if (!sensitive) {
         NSMutableParagraphStyle *align = [NSMutableParagraphStyle new];
         align.alignment = NSTextAlignmentRight;
-        [ActivityTime(entry[@"last_used"]) drawInRect:NSMakeRect(right-56,center-7,56,16)
+        [ActivityTime(entry[@"last_used"]) drawInRect:timeRect
             withAttributes:@{NSFontAttributeName:[NSFont monospacedDigitSystemFontOfSize:11 weight:NSFontWeightMedium],
                 NSForegroundColorAttributeName:Secondary(), NSParagraphStyleAttributeName:align}];
     }
@@ -456,8 +534,6 @@ static NSColor *Swatch(NSString *hex) {
     }
     [NSGraphicsContext restoreGraphicsState];
 
-    [[NSColor.separatorColor colorWithAlphaComponent:0.28] setFill];
-    NSRectFill(NSMakeRect(left,top+176,right-left,1));
     NSString *caption = sensitive ? @"Spasi untuk membuka" : imageSize;
     if (caption.length) {
         DrawText(caption,NSMakeRect(left,top+184,right-left-47,15),11.5,
@@ -486,6 +562,10 @@ static NSColor *Swatch(NSString *hex) {
 }
 
 - (void)mouseDown:(NSEvent *)event {
+    if (self.actionsSuspended) return;
+    self.pressedClipID = nil;
+    self.dragEvent = nil;
+    self.clickDeferred = NO;
     NSPoint point = [self convertPoint:event.locationInWindow fromView:nil];
     NSInteger index = [self indexAt:point];
     if (index < 0 || !self.picked) {
@@ -511,10 +591,91 @@ static NSColor *Swatch(NSString *hex) {
     self.lastClickPoint = point;
 
     [self.window makeFirstResponder:self];
+    if (!extend && !toggle) {
+        self.pressedClipID = identifier;
+        self.pressPoint = point;
+        if (action == OCResultConfirm || [self.selectedIndexes containsIndex:(NSUInteger)index]) {
+            self.deferredClick = action;
+            self.clickDeferred = YES;
+            return;
+        }
+    }
     self.picked(index,action);
 }
 
+- (BOOL)hasPointerGesture {
+    return self.pressedClipID != nil;
+}
+
+- (void)mouseDragged:(NSEvent *)event {
+    if (self.actionsSuspended || !self.pressedClipID || !self.prepareDrag) return;
+    if (self.dragEvent) {
+        self.dragEvent = event;
+        return;
+    }
+    NSPoint point = [self convertPoint:event.locationInWindow fromView:nil];
+    if (hypot(point.x-self.pressPoint.x,point.y-self.pressPoint.y) < 5) return;
+    self.clickDeferred = NO;
+    self.lastClickID = nil;
+    self.dragEvent = event;
+    NSMutableArray<NSDictionary *> *selection = [NSMutableArray array];
+    [self.selectedIndexes enumerateIndexesUsingBlock:^(NSUInteger index, __unused BOOL *stop) {
+        if (index < self.rows.count) [selection addObject:self.rows[index]];
+    }];
+    for (NSDictionary *row in selection) {
+        if ([row[@"id"] isEqual:self.pressedClipID]) {
+            self.prepareDrag(selection);
+            return;
+        }
+    }
+}
+
+- (void)mouseUp:(NSEvent *)event {
+    NSNumber *identifier = self.pressedClipID;
+    self.pressedClipID = nil;
+    self.dragEvent = nil;
+    if (!self.clickDeferred) return;
+    self.clickDeferred = NO;
+    if (!event || self.actionsSuspended) return;
+    NSInteger index = [self indexAt:[self convertPoint:event.locationInWindow fromView:nil]];
+    if (index >= 0 && [identifier isEqual:self.rows[(NSUInteger)index][@"id"]])
+        self.picked(index,self.deferredClick);
+}
+
+- (void)beginPreparedDrag:(NSArray<NSPasteboardItem *> *)items {
+    NSEvent *event = self.dragEvent;
+    if (!event || !self.window || !items.count || !(NSEvent.pressedMouseButtons & 1)) return;
+    self.dragEvent = nil;
+    self.pressedClipID = nil;
+    NSPoint point = [self convertPoint:event.locationInWindow fromView:nil];
+    NSImage *icon = Symbol(@"doc.on.doc");
+    NSMutableArray<NSDraggingItem *> *dragItems = [NSMutableArray arrayWithCapacity:items.count];
+    NSURL *directory = nil;
+    for (NSPasteboardItem *item in items) {
+        AddDragFile(item,dragItems.count+1,&directory);
+        NSDraggingItem *dragItem = [[NSDraggingItem alloc] initWithPasteboardWriter:item];
+        [dragItem setDraggingFrame:NSMakeRect(point.x-12,point.y-12,24,24)
+            contents:dragItems.count ? nil : icon];
+        [dragItems addObject:dragItem];
+    }
+    self.dragImageDirectory = directory;
+    NSDraggingSession *session = [self beginDraggingSessionWithItems:dragItems event:event source:self];
+    session.draggingFormation = NSDraggingFormationNone;
+}
+
+- (NSDragOperation)draggingSession:(NSDraggingSession *)session sourceOperationMaskForDraggingContext:(NSDraggingContext)context {
+    return context == NSDraggingContextOutsideApplication ? NSDragOperationCopy : NSDragOperationNone;
+}
+
+- (void)draggingSession:(NSDraggingSession *)session endedAtPoint:(NSPoint)point operation:(NSDragOperation)operation {
+    // An accepting app can read the image asynchronously after the drop.
+    if (operation == NSDragOperationNone && self.dragImageDirectory)
+        [NSFileManager.defaultManager removeItemAtURL:self.dragImageDirectory error:nil];
+    self.dragImageDirectory = nil;
+}
+
 - (NSMenu *)menuForEvent:(NSEvent *)event {
+    if (self.actionsSuspended) return nil;
     NSInteger index = [self indexAt:[self convertPoint:event.locationInWindow fromView:nil]];
     if (index < 0 || !self.contextMenu) return nil;
     [self.window makeFirstResponder:self];
@@ -523,9 +684,9 @@ static NSColor *Swatch(NSString *hex) {
 }
 
 - (NSArray *)accessibilityChildren {
-    if (!self.rows.count) {
+    if (!self.rows.count || self.actionsSuspended) {
         self.accessibleRows = nil;
-        return [super accessibilityChildren];
+        return self.rows.count ? @[] : [super accessibilityChildren];
     }
     NSMutableArray *children = [NSMutableArray array];
     NSRect visible = self.visibleRect;

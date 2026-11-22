@@ -37,6 +37,22 @@ static NSImage *TintedSymbol(NSString *name, CGFloat size, NSColor *color) {
     return [image imageWithSymbolConfiguration:config];
 }
 
+NSArray<NSDictionary *> *OCTabPalette(void) {
+    return @[@{@"key":@"red",@"title":@"Merah"}, @{@"key":@"orange",@"title":@"Oranye"},
+        @{@"key":@"yellow",@"title":@"Kuning"}, @{@"key":@"green",@"title":@"Hijau"},
+        @{@"key":@"teal",@"title":@"Teal"}, @{@"key":@"blue",@"title":@"Biru"},
+        @{@"key":@"purple",@"title":@"Ungu"}, @{@"key":@"pink",@"title":@"Merah muda"},
+        @{@"key":@"gray",@"title":@"Abu-abu"}];
+}
+
+NSColor *OCTabColor(NSString *key, int64_t collectionID) {
+    NSDictionary<NSString *, NSColor *> *colors = @{
+        @"red":NSColor.systemRedColor, @"orange":NSColor.systemOrangeColor, @"yellow":NSColor.systemYellowColor,
+        @"green":NSColor.systemGreenColor, @"teal":NSColor.systemTealColor, @"blue":NSColor.systemBlueColor,
+        @"purple":NSColor.systemPurpleColor, @"pink":NSColor.systemPinkColor, @"gray":NSColor.systemGrayColor};
+    return colors[key ?: @""] ?: [NSColor colorWithHue:oc_tab_hue(collectionID) saturation:0.65 brightness:0.9 alpha:1];
+}
+
 @interface OCTabElement : NSAccessibilityElement
 @property(nonatomic, copy) void (^press)(void);
 @property(nonatomic) BOOL selected;
@@ -52,6 +68,8 @@ static NSImage *TintedSymbol(NSString *name, CGFloat size, NSColor *color) {
 
 @interface OCTabs () <NSTextFieldDelegate>
 @property(nonatomic) CGFloat offset;
+@property(nonatomic, strong) NSTrackingArea *pointerTracking;
+@property(nonatomic) BOOL pointerInside;
 @property(nonatomic, strong) NSTextField *editor;
 @property(nonatomic) int64_t editingID;
 @property(nonatomic, copy) NSString *editingInitial;
@@ -207,10 +225,25 @@ static NSImage *TintedSymbol(NSString *name, CGFloat size, NSColor *color) {
 }
 - (NSRect)focusRingMaskBounds { return [self selectionRect]; }
 
+- (void)updateTrackingAreas {
+    [super updateTrackingAreas];
+    if (self.pointerTracking) [self removeTrackingArea:self.pointerTracking];
+    self.pointerTracking = [[NSTrackingArea alloc] initWithRect:NSZeroRect
+        options:NSTrackingMouseEnteredAndExited | NSTrackingMouseMoved | NSTrackingActiveInKeyWindow | NSTrackingInVisibleRect
+        owner:self userInfo:nil];
+    [self addTrackingArea:self.pointerTracking];
+}
+
+- (void)mouseEntered:(NSEvent *)event { self.pointerInside = YES; self.needsDisplay = YES; }
+- (void)mouseExited:(NSEvent *)event { self.pointerInside = NO; self.needsDisplay = YES; }
+- (void)mouseMoved:(NSEvent *)event { self.pointerInside = YES; self.needsDisplay = YES; }
+
 - (void)drawRect:(NSRect)dirtyRect {
     BOOL vertical = self.orientation == OCTabsVertical;
     BOOL contrast = NSWorkspace.sharedWorkspace.accessibilityDisplayShouldIncreaseContrast;
     NSInteger selected = self.selectedIndex;
+    NSInteger hovered = self.pointerInside && self.window.isKeyWindow
+        ? [self itemAtPoint:[self convertPoint:self.window.mouseLocationOutsideOfEventStream fromView:nil]] : -1;
     NSMutableParagraphStyle *style = [NSMutableParagraphStyle new];
     style.lineBreakMode = NSLineBreakByTruncatingTail;
 
@@ -222,6 +255,10 @@ static NSImage *TintedSymbol(NSString *name, CGFloat size, NSColor *color) {
         BOOL active = i == selected && editing < 0;
         NSRect pill = vertical ? NSInsetRect(frame, 4, 2) : frame;
         if (active) DrawGlass(pill, NO);
+        else if (i == hovered) {
+            [[NSColor.labelColor colorWithAlphaComponent:contrast ? 0.16 : 0.08] setFill];
+            [[NSBezierPath bezierPathWithRoundedRect:pill xRadius:11 yRadius:11] fill];
+        }
         NSColor *textColor = active || contrast ? NSColor.labelColor : NSColor.secondaryLabelColor;
         CGFloat left = NSMinX(pill) + (vertical ? 10 : PillPadding);
         if (i == 0) {
@@ -232,9 +269,8 @@ static NSImage *TintedSymbol(NSString *name, CGFloat size, NSColor *color) {
                 respectFlipped:YES hints:nil];
             left += 15 + 7;
         } else {
-            int64_t identifier = [self.collections[(NSUInteger)i-1][@"id"] longLongValue];
-            NSColor *dot = [NSColor colorWithHue:oc_tab_hue(identifier) saturation:0.65 brightness:0.9 alpha:1];
-            [dot setFill];
+            NSDictionary *collection = self.collections[(NSUInteger)i-1];
+            [OCTabColor(collection[@"color"], [collection[@"id"] longLongValue]) setFill];
             [[NSBezierPath bezierPathWithOvalInRect:NSMakeRect(left, NSMidY(pill)-4.5, 9, 9)] fill];
             left += 9 + 7;
         }
@@ -253,7 +289,13 @@ static NSImage *TintedSymbol(NSString *name, CGFloat size, NSColor *color) {
 
     NSRect add = [self frameAtIndex:self.plusIndex];
     if (NSIntersectsRect(add, dirtyRect)) {
-        NSImage *symbol = TintedSymbol(@"plus", 13, NSColor.secondaryLabelColor);
+        BOOL addHovered = hovered == self.plusIndex;
+        if (addHovered) {
+            NSRect pill = vertical ? NSInsetRect(add, 4, 2) : add;
+            [[NSColor.labelColor colorWithAlphaComponent:contrast ? 0.16 : 0.08] setFill];
+            [[NSBezierPath bezierPathWithRoundedRect:pill xRadius:11 yRadius:11] fill];
+        }
+        NSImage *symbol = TintedSymbol(@"plus", 13, addHovered ? NSColor.labelColor : NSColor.secondaryLabelColor);
         NSSize size = symbol.size;
         NSRect target = vertical
             ? NSMakeRect(NSMinX(add)+14, NSMidY(add)-size.height/2, size.width, size.height)
@@ -267,7 +309,10 @@ static NSImage *TintedSymbol(NSString *name, CGFloat size, NSColor *color) {
 
 - (void)mouseDown:(NSEvent *)event {
     NSInteger index = [self itemAtPoint:[self convertPoint:event.locationInWindow fromView:nil]];
-    if (index < 0) return;
+    if (index < 0) {
+        if (self.onClickEmpty) self.onClickEmpty();
+        return;
+    }
     [self.window makeFirstResponder:self];
     if (index == self.plusIndex) { if (self.onAdd) self.onAdd(); return; }
     if (index == self.editingIndex) return;

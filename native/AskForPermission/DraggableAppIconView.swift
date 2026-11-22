@@ -147,7 +147,7 @@ public final class DraggableAppIconView: NSView, NSDraggingSource {
         item.setDraggingFrame(bounds, contents: renderSnapshot() ?? appIcon)
 
         let session = beginDraggingSession(with: [item], event: event, source: self)
-        session.animatesToStartingPositionsOnCancelOrFail = true
+        session.animatesToStartingPositionsOnCancelOrFail = !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         session.draggingFormation = .none
     }
 

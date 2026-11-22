@@ -18,6 +18,7 @@ pub(crate) enum Error {
     Missing,
     CollectionName,
     CollectionMissing,
+    CollectionColor,
     UndoUnavailable,
     UndoFull,
     NotManuallySensitive,
@@ -35,6 +36,8 @@ type Result<T> = std::result::Result<T, Error>;
 pub(crate) struct Collection {
     id: i64,
     name: String,
+    /// Palette key for the tab dot, or empty for the automatic colour.
+    color: String,
 }
 
 #[derive(Serialize)]
@@ -110,7 +113,8 @@ impl History {
              );
              CREATE TABLE IF NOT EXISTS collections (
                  id INTEGER PRIMARY KEY AUTOINCREMENT,
-                 name TEXT NOT NULL UNIQUE COLLATE NOCASE
+                 name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                 color TEXT NOT NULL DEFAULT ''
              );
              CREATE TABLE IF NOT EXISTS memberships (
                  clip INTEGER NOT NULL REFERENCES clips(id) ON DELETE CASCADE,
@@ -125,6 +129,17 @@ impl History {
         )?;
         if !has_pasted {
             disk.execute("ALTER TABLE clips ADD COLUMN pasted INTEGER", [])?;
+        }
+        let has_color: bool = disk.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('collections') WHERE name='color')",
+            [],
+            |row| row.get(0),
+        )?;
+        if !has_color {
+            disk.execute(
+                "ALTER TABLE collections ADD COLUMN color TEXT NOT NULL DEFAULT ''",
+                [],
+            )?;
         }
         Ok(Self {
             disk,
@@ -269,12 +284,13 @@ impl History {
         });
         let mut select = self
             .disk
-            .prepare("SELECT id,name FROM collections ORDER BY id")?;
+            .prepare("SELECT id,name,color FROM collections ORDER BY id")?;
         let collections = select
             .query_map([], |row| {
                 Ok(Collection {
                     id: row.get(0)?,
                     name: row.get(1)?,
+                    color: row.get(2)?,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -350,6 +366,19 @@ impl History {
                 Err(Error::CollectionName)
             }
             Err(error) => Err(error.into()),
+        }
+    }
+
+    pub fn set_collection_color(&mut self, id: i64, color: &str) -> Result<()> {
+        if !COLLECTION_COLORS.contains(&color) {
+            return Err(Error::CollectionColor);
+        }
+        match self.disk.execute(
+            "UPDATE collections SET color=?2 WHERE id=?1",
+            params![id, color],
+        )? {
+            0 => Err(Error::CollectionMissing),
+            _ => Ok(()),
         }
     }
 
@@ -779,6 +808,11 @@ fn trim(transaction: &Transaction<'_>, limit: usize, added: Option<i64>) -> Resu
     Err(Error::Full)
 }
 
+/// Palette keys a collection may use for its tab dot. Empty means automatic.
+const COLLECTION_COLORS: [&str; 10] = [
+    "", "red", "orange", "yellow", "green", "teal", "blue", "purple", "pink", "gray",
+];
+
 fn validate_collection_name(name: &str) -> Result<&str> {
     let name = name.trim();
     if name.is_empty() || name.chars().count() > 60 {
@@ -1160,6 +1194,63 @@ mod tests {
             history.rename_collection(primary, "Bekas"),
             Err(Error::CollectionMissing)
         ));
+    }
+
+    #[test]
+    fn collection_color_is_automatic_until_set_and_can_be_cleared() {
+        let mut history = history();
+        let id = history.create_collection("Tautan").ok().unwrap();
+        let color = |history: &History| {
+            history.catalog("", "", 0).ok().unwrap().collections[0]
+                .color
+                .clone()
+        };
+        assert_eq!(color(&history), "");
+        history.set_collection_color(id, "green").ok().unwrap();
+        assert_eq!(color(&history), "green");
+        history
+            .rename_collection(id, "Tautan penting")
+            .ok()
+            .unwrap();
+        assert_eq!(color(&history), "green");
+        history.set_collection_color(id, "").ok().unwrap();
+        assert_eq!(color(&history), "");
+    }
+
+    #[test]
+    fn collection_color_rejects_unknown_names_and_missing_collections() {
+        let mut history = history();
+        let id = history.create_collection("Tautan").ok().unwrap();
+        history.set_collection_color(id, "red").ok().unwrap();
+        assert!(matches!(
+            history.set_collection_color(id, "chartreuse"),
+            Err(Error::CollectionColor)
+        ));
+        assert!(matches!(
+            history.set_collection_color(id, "RED"),
+            Err(Error::CollectionColor)
+        ));
+        assert!(matches!(
+            history.set_collection_color(id + 100, "red"),
+            Err(Error::CollectionMissing)
+        ));
+        let collections = history.catalog("", "", 0).ok().unwrap().collections;
+        assert_eq!(collections[0].color, "red");
+    }
+
+    #[test]
+    fn upgrading_history_adds_the_collection_color_column() {
+        let mut before = history();
+        let id = before.create_collection("Kerja").ok().unwrap();
+        before
+            .disk
+            .execute("ALTER TABLE collections DROP COLUMN color", [])
+            .unwrap();
+        let mut history = History::new(before.disk).ok().unwrap();
+        history.set_collection_color(id, "blue").ok().unwrap();
+        let collections = history.catalog("", "", 0).ok().unwrap().collections;
+        assert_eq!(collections[0].name, "Kerja");
+        assert_eq!(collections[0].color, "blue");
     }
 
     #[test]

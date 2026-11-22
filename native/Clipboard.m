@@ -55,19 +55,17 @@ static BOOL ReadAXValue(id value, AXValueType type, void *output) {
         && AXValueGetValue((__bridge AXValueRef)value,type,output);
 }
 
-static id FocusedTextElement(pid_t pid) {
-    AXUIElementRef app = AXUIElementCreateApplication(pid);
-    AXUIElementSetMessagingTimeout(app,0.035);
-    id focused = AXAttribute(app,kAXFocusedUIElementAttribute);
-    CFRelease(app);
-    if (focused && CFGetTypeID((__bridge CFTypeRef)focused) == AXUIElementGetTypeID()) return focused;
+static BOOL IsAXElement(id value) {
+    return value && CFGetTypeID((__bridge CFTypeRef)value) == AXUIElementGetTypeID();
+}
 
+static id SystemFocusedElement(pid_t pid) {
     AXUIElementRef system = AXUIElementCreateSystemWide();
     AXUIElementSetMessagingTimeout(system,0.035);
-    focused = AXAttribute(system,kAXFocusedUIElementAttribute);
+    id focused = AXAttribute(system,kAXFocusedUIElementAttribute);
     CFRelease(system);
     pid_t focusedPID;
-    return focused && CFGetTypeID((__bridge CFTypeRef)focused) == AXUIElementGetTypeID() &&
+    return IsAXElement(focused) &&
         AXUIElementGetPid((__bridge AXUIElementRef)focused,&focusedPID) == kAXErrorSuccess && focusedPID == pid
         ? focused : nil;
 }
@@ -120,45 +118,20 @@ static CGRect InsertionBounds(AXUIElementRef element, CFIndex index) {
     return CGRectMake(x,CGRectGetMinY(glyph),0,CGRectGetHeight(glyph));
 }
 
-static CGRect FocusedFieldBounds(AXUIElementRef element) {
-    id role = AXAttribute(element,kAXRoleAttribute);
-    if (![role isEqual:(__bridge NSString *)kAXTextFieldRole] && ![role isEqual:(__bridge NSString *)kAXTextAreaRole])
-        return CGRectNull;
-    CGPoint position;
-    CGSize size;
-    if (!ReadAXValue(AXAttribute(element,kAXPositionAttribute),kAXValueTypeCGPoint,&position) ||
-        !ReadAXValue(AXAttribute(element,kAXSizeAttribute),kAXValueTypeCGSize,&size)) return CGRectNull;
-    CGRect rect = {position,size};
-    return ValidTextBounds(rect) ? rect : CGRectNull;
+static CGRect ElementBounds(AXUIElementRef element) {
+    CGRect rect;
+    if (ReadAXValue(AXAttribute(element,CFSTR("AXFrame")),kAXValueTypeCGRect,&rect) &&
+        ValidTextBounds(rect) && rect.size.width > 0) return rect;
+    if (!ReadAXValue(AXAttribute(element,kAXPositionAttribute),kAXValueTypeCGPoint,&rect.origin) ||
+        !ReadAXValue(AXAttribute(element,kAXSizeAttribute),kAXValueTypeCGSize,&rect.size)) return CGRectNull;
+    return ValidTextBounds(rect) && rect.size.width > 0 ? rect : CGRectNull;
 }
 
-BOOL OCGetCaret(pid_t pid, NSRect *result) {
-    if (pid <= 0 || !AXIsProcessTrusted()) return NO;
-    id focused = FocusedTextElement(pid);
-    if (!focused) return NO;
-    AXUIElementRef element = (__bridge AXUIElementRef)focused;
-    AXUIElementSetMessagingTimeout(element,0.035);
-
-    CGRect rect = CGRectNull;
-    CFRange selected;
-    if (ReadAXValue(AXAttribute(element,kAXSelectedTextRangeAttribute),kAXValueTypeCFRange,&selected) &&
-        selected.location >= 0 && selected.length >= 0 && selected.length <= LONG_MAX-selected.location) {
-        rect = InsertionBounds(element,selected.location+selected.length);
-        if (selected.location == 0 && selected.length == 0 && !CGRectIsNull(rect)) {
-            CGRect field = FocusedFieldBounds(element);
-            if (!CGRectIsNull(field)) rect.origin.y = MAX(rect.origin.y,CGRectGetMinY(field));
-        }
-    }
-    if (CGRectIsNull(rect)) {
-        CGRect field = FocusedFieldBounds(element);
-        if (CGRectIsNull(field) || CGRectGetHeight(field) > 64) return NO;
-        rect = CGRectMake(CGRectGetMinX(field)+6,CGRectGetMinY(field),0,CGRectGetHeight(field));
-    }
-    NSArray<NSScreen *> *screens = NSScreen.screens;
-    if (!screens.count) return NO;
+static BOOL CaretOnScreen(CGRect rect, NSArray<NSScreen *> *screens, NSRect *result) {
+    if (CGRectIsNull(rect)) return NO;
     rect.origin.y = NSMaxY(screens.firstObject.frame) - CGRectGetMaxY(rect);
     for (NSScreen *screen in screens) {
-        if (NSPointInRect(rect.origin, NSInsetRect(screen.frame, -1, -1))) {
+        if (NSPointInRect(rect.origin, NSInsetRect(screen.frame,-1,-1))) {
             *result = rect;
             return YES;
         }
@@ -166,8 +139,64 @@ BOOL OCGetCaret(pid_t pid, NSRect *result) {
     return NO;
 }
 
-BOOL OCWriteClipboard(NSArray<NSDictionary *> *parts, BOOL sensitive, NSInteger *version) {
-    if (!parts.count) return NO;
+static BOOL LocateFocusedCaret(id focused, NSArray<NSScreen *> *screens, NSRect *result) {
+    NSRect fallback = NSZeroRect;
+    BOOL hasFallback = NO;
+    // Some editors put the focused child inside the accessible text control.
+    for (NSUInteger depth = 0; depth < 3 && IsAXElement(focused); depth++) {
+        AXUIElementRef element = (__bridge AXUIElementRef)focused;
+        AXUIElementSetMessagingTimeout(element,0.035);
+        id role = AXAttribute(element,kAXRoleAttribute);
+        if ([role isEqual:(__bridge NSString *)kAXWindowRole] ||
+            [role isEqual:(__bridge NSString *)kAXApplicationRole]) break;
+        BOOL textControl = [role isEqual:(__bridge NSString *)kAXTextFieldRole] ||
+            [role isEqual:(__bridge NSString *)kAXTextAreaRole] ||
+            [role isEqual:(__bridge NSString *)kAXComboBoxRole];
+        CFRange selected;
+        BOOL hasSelection = ReadAXValue(AXAttribute(element,kAXSelectedTextRangeAttribute),kAXValueTypeCFRange,&selected) &&
+            selected.location >= 0 && selected.length >= 0 && selected.length <= LONG_MAX-selected.location;
+        CGRect field = textControl || hasSelection ? ElementBounds(element) : CGRectNull;
+        if (hasSelection) {
+            CGRect caret = InsertionBounds(element,selected.location+selected.length);
+            if (!CGRectIsNull(caret) && !CGRectIsNull(field)) {
+                if (selected.location == 0 && selected.length == 0) {
+                    caret.origin.y = MAX(caret.origin.y,CGRectGetMinY(field));
+                }
+                CGPoint midpoint = CGPointMake(CGRectGetMinX(caret),CGRectGetMidY(caret));
+                if (!CGRectContainsPoint(CGRectInset(field,-8,-8),midpoint)) caret = CGRectNull;
+            }
+            if (CaretOnScreen(caret,screens,result)) return YES;
+        }
+        if (!hasFallback && !CGRectIsNull(field) && field.size.width > 8 && field.size.height > 8) {
+            // A location inside the editor is still useful when it exposes only its frame.
+            CGFloat lineHeight = MIN(24,CGRectGetHeight(field));
+            CGRect nearInput = CGRectMake(CGRectGetMinX(field)+6,CGRectGetMinY(field),0,lineHeight);
+            hasFallback = CaretOnScreen(nearInput,screens,&fallback);
+        }
+        focused = AXAttribute(element,kAXParentAttribute);
+    }
+    if (hasFallback) *result = fallback;
+    return hasFallback;
+}
+
+BOOL OCGetCaret(pid_t pid, NSRect *result) {
+    if (pid <= 0 || !AXIsProcessTrusted()) return NO;
+    NSArray<NSScreen *> *screens = NSScreen.screens;
+    if (!screens.count) return NO;
+
+    AXUIElementRef app = AXUIElementCreateApplication(pid);
+    AXUIElementSetMessagingTimeout(app,0.035);
+    id focused = AXAttribute(app,kAXFocusedUIElementAttribute);
+    CFRelease(app);
+    if (LocateFocusedCaret(focused,screens,result)) return YES;
+
+    id systemFocused = SystemFocusedElement(pid);
+    return systemFocused && (!IsAXElement(focused) ||
+        !CFEqual((__bridge CFTypeRef)systemFocused,(__bridge CFTypeRef)focused)) &&
+        LocateFocusedCaret(systemFocused,screens,result);
+}
+
+NSArray<NSPasteboardItem *> *OCPasteboardItems(NSArray<NSDictionary *> *parts) {
     NSMutableArray<NSPasteboardItem *> *items = [NSMutableArray array];
     NSUInteger index = NSNotFound;
     NSPasteboardItem *item = nil;
@@ -175,12 +204,20 @@ BOOL OCWriteClipboard(NSArray<NSDictionary *> *parts, BOOL sensitive, NSInteger 
         NSUInteger next = [part[@"item"] unsignedIntegerValue];
         if (next != index || !item) {
             item = [NSPasteboardItem new];
-            [item setData:[NSData data] forType:OCOwnWrite];
-            if (sensitive) [item setData:[NSData data] forType:OCConcealed];
             [items addObject:item];
             index = next;
         }
-        if (![item setData:part[@"data"] forType:part[@"type"]]) return NO;
+        if (![item setData:part[@"data"] forType:part[@"type"]]) return nil;
+    }
+    return items;
+}
+
+BOOL OCWriteClipboard(NSArray<NSDictionary *> *parts, BOOL sensitive, NSInteger *version) {
+    NSArray<NSPasteboardItem *> *items = OCPasteboardItems(parts);
+    if (!items.count) return NO;
+    for (NSPasteboardItem *item in items) {
+        [item setData:[NSData data] forType:OCOwnWrite];
+        if (sensitive) [item setData:[NSData data] forType:OCConcealed];
     }
     NSPasteboard *pasteboard = OCBoard();
     [pasteboard clearContents];
