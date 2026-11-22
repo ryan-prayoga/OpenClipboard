@@ -8,6 +8,16 @@
 
 OpenClipboard berguna saat kamu sudah menyalin teks lain dan perlu mengambil salinan sebelumnya. Buka riwayat, ketik sebagian teks yang kamu ingat, lalu pilih klipnya. Tautan, gambar, dan warna juga ikut terekam saat aplikasi berjalan.
 
+## Unduh dan pasang
+
+[Unduh DMG untuk Mac Apple Silicon](https://github.com/ryan-prayoga/OpenClipboard/releases/latest). Dibutuhkan macOS 27.0 atau lebih baru.
+
+1. Buka file DMG yang kamu unduh.
+2. Seret **OpenClipboard** ke folder **Applications**.
+3. Buka OpenClipboard dari Applications atau Spotlight.
+
+Rilis ini belum dinotariskan oleh Apple. Jika macOS memblokir saat pertama dibuka, buka **System Settings → Privacy & Security** dan pilih **Open Anyway**. [Panduan Apple](https://support.apple.com/en-us/102445)
+
 ## Dua tampilan riwayat
 
 Popup muncul di dekat kursor teks jika izin Accessibility aktif. Daftar klip ada di sebelah kanan, sementara koleksi bisa dipilih dari sisi kiri.
