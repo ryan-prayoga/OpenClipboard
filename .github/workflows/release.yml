@@ -34,9 +34,15 @@ jobs:
           cargo_version=$(sed -n 's/^version = "\([^"]*\)"$/\1/p' Cargo.toml)
           [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
           test "$version" = "$cargo_version"
+          notes="docs/releases/v$version.md"
           if [[ "$GITHUB_EVENT_NAME" == push ]]; then
             test "$GITHUB_REF_NAME" = "v$version"
+            if ! grep -q '[^[:space:]]' "$notes"; then
+              echo "::error file=$notes::Add release notes before pushing the version tag."
+              exit 1
+            fi
           fi
+          printf 'notes=%s\n' "$notes" >> "$GITHUB_OUTPUT"
           printf 'asset=dist/OpenClipboard-%s-arm64.dmg\n' "$version" >> "$GITHUB_OUTPUT"
 
       - name: Test, build, and package
@@ -51,7 +57,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           ASSET: ${{ steps.version.outputs.asset }}
+          NOTES: ${{ steps.version.outputs.notes }}
         run: |
           gh release create "$GITHUB_REF_NAME" "$ASSET" "$ASSET.sha256" \
             --verify-tag --latest --title "OpenClipboard $GITHUB_REF_NAME" \
-            --notes "Untuk Mac Apple Silicon dengan macOS 13 atau lebih baru. Buka DMG dan seret OpenClipboard ke Applications. Rilis ini belum dinotariskan Apple."
+            --notes-file "$NOTES"

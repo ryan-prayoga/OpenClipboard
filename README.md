@@ -81,11 +81,11 @@ Panduan izin Accessibility menyertakan kode dari AskForPermission. Pemberitahuan
 
 ## Menerbitkan rilis
 
-Samakan versi di `Cargo.toml`, entri `openclipboard` di `Cargo.lock`, dan `CFBundleShortVersionString` di `native/Info.plist`. Naikkan juga `CFBundleVersion`. Setelah perubahan versi masuk ke `main`, buat dan push tag yang sesuai. Contoh untuk versi 0.1.4:
+Samakan versi di `Cargo.toml`, entri `openclipboard` di `Cargo.lock`, dan `CFBundleShortVersionString` di `native/Info.plist`. Naikkan juga `CFBundleVersion` dan tulis perubahan yang dirasakan pengguna di `docs/releases/v<versi>.md`. Workflow memakai isi file itu sebagai catatan rilis. Setelah perubahan masuk ke `main`, buat dan push tag yang sesuai. Contoh untuk versi 0.1.5:
 
 ```sh
-git tag v0.1.4
-git push origin v0.1.4
+git tag v0.1.5
+git push origin v0.1.5
 ```
 
 GitHub Actions menjalankan tes, membuat DMG dan checksum SHA-256, lalu menerbitkan keduanya di GitHub Releases. Untuk mencoba build tanpa menerbitkan rilis, jalankan workflow **Release macOS** secara manual dari tab **Actions**.
