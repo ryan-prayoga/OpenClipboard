@@ -8,7 +8,39 @@ pub(crate) const DISK_LIMIT: usize = 256 * 1024 * 1024;
 pub(crate) struct Part {
     pub item: usize,
     pub mime: String,
+    #[serde(with = "payload_bytes")]
     pub data: Vec<u8>,
+}
+
+// Bincode encodes bytes and Vec<u8> identically: a length followed by raw bytes.
+mod payload_bytes {
+    use serde::{Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(bytes: &[u8], serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_bytes(bytes)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<u8>, D::Error> {
+        deserializer.deserialize_byte_buf(ByteBuffer)
+    }
+
+    struct ByteBuffer;
+
+    impl<'de> serde::de::Visitor<'de> for ByteBuffer {
+        type Value = Vec<u8>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("clipboard payload bytes")
+        }
+
+        fn visit_bytes<E: serde::de::Error>(self, bytes: &[u8]) -> Result<Self::Value, E> {
+            Ok(bytes.to_vec())
+        }
+
+        fn visit_byte_buf<E: serde::de::Error>(self, bytes: Vec<u8>) -> Result<Self::Value, E> {
+            Ok(bytes)
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -232,6 +264,43 @@ pub(crate) fn sensitive(parts: &[Part]) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn clipboard_payload_encoding_matches_existing_history() {
+        #[derive(serde::Serialize, serde::Deserialize)]
+        struct LegacyPart {
+            item: usize,
+            mime: String,
+            data: Vec<u8>,
+        }
+
+        let parts = vec![
+            super::Part {
+                item: 0,
+                mime: "public.png".into(),
+                data: (0..=255).collect(),
+            },
+            super::Part {
+                item: 1,
+                mime: "public.utf8-plain-text".into(),
+                data: vec![],
+            },
+        ];
+        let legacy: Vec<_> = parts
+            .iter()
+            .map(|part| LegacyPart {
+                item: part.item,
+                mime: part.mime.clone(),
+                data: part.data.clone(),
+            })
+            .collect();
+        let previous = bincode::serialize(&legacy).unwrap();
+        assert_eq!(bincode::serialize(&parts).unwrap(), previous);
+        assert_eq!(
+            bincode::deserialize::<Vec<super::Part>>(&previous).unwrap(),
+            parts
+        );
+    }
+
     use super::*;
 
     fn text(value: &str) -> Part {

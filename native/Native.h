@@ -47,6 +47,8 @@ BOOL OCPostPaste(pid_t destination, NSInteger version);
 - (void)startTimer;
 - (void)retry;
 - (void)resetBaseline;
+- (void)captureNow;
+- (BOOL)prepareClipboardWrite;
 - (void)storageFull:(BOOL)full;
 @end
 
@@ -62,5 +64,5 @@ BOOL OCPostPaste(pid_t destination, NSInteger version);
 - (void)receivePayload:(NSArray<NSDictionary *> *)parts ticket:(uint64_t)ticket
                     id:(int64_t)clip sensitive:(BOOL)sensitive;
 - (void)receiveThumbnail:(NSData *)image ticket:(uint64_t)ticket id:(int64_t)clip;
-@property(nonatomic, copy) dispatch_block_t didWriteClipboard;
+@property(nonatomic, copy) BOOL (^prepareClipboardWrite)(void);
 @end

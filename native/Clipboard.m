@@ -8,8 +8,8 @@ static NSString *const OCSource = @"org.nspasteboard.source";
 static NSString *const OCConcealed = @"org.nspasteboard.ConcealedType";
 static NSString *const OCOwnWrite = @"dev.ryanprayoga.openclipboard.restore";
 static const NSUInteger ImageLimit = 25 * 1024 * 1024;
-// Re-checks of an incomplete pasteboard change at the 125 ms poll interval, about 3 seconds.
-static const NSInteger RetryLimit = 24;
+static const NSTimeInterval PollInterval = 0.125;
+static const NSTimeInterval RetryWindow = 3.0;
 
 static NSPasteboard *OCBoard(void) {
     NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
@@ -44,7 +44,14 @@ static NSSet<NSString *> *SupportedTypes(void) {
     return types;
 }
 
-static id AXAttribute(AXUIElementRef element, CFStringRef name) {
+static BOOL SetCaretTimeout(AXUIElementRef element, NSTimeInterval deadline) {
+    NSTimeInterval remaining = deadline - NSProcessInfo.processInfo.systemUptime;
+    if (remaining < 0.001) return NO;
+    return AXUIElementSetMessagingTimeout(element, (float)remaining) == kAXErrorSuccess;
+}
+
+static id AXAttribute(AXUIElementRef element, CFStringRef name, NSTimeInterval deadline) {
+    if (!SetCaretTimeout(element,deadline)) return nil;
     CFTypeRef value = NULL;
     AXUIElementCopyAttributeValue(element,name,&value);
     return CFBridgingRelease(value);
@@ -59,10 +66,10 @@ static BOOL IsAXElement(id value) {
     return value && CFGetTypeID((__bridge CFTypeRef)value) == AXUIElementGetTypeID();
 }
 
-static id SystemFocusedElement(pid_t pid) {
+static id SystemFocusedElement(pid_t pid, NSTimeInterval deadline) {
     AXUIElementRef system = AXUIElementCreateSystemWide();
-    AXUIElementSetMessagingTimeout(system,0.035);
-    id focused = AXAttribute(system,kAXFocusedUIElementAttribute);
+    id focused = AXAttribute(system,kAXFocusedUIElementAttribute,deadline);
+    AXUIElementSetMessagingTimeout(system,0);
     CFRelease(system);
     pid_t focusedPID;
     return IsAXElement(focused) &&
@@ -75,7 +82,8 @@ static BOOL ValidTextBounds(CGRect rect) {
         isfinite(rect.size.width) && isfinite(rect.size.height) && rect.size.width >= 0 && rect.size.height > 0;
 }
 
-static CGRect BoundsForTextRange(AXUIElementRef element, CFIndex index, CFIndex length) {
+static CGRect BoundsForTextRange(AXUIElementRef element, CFIndex index, CFIndex length, NSTimeInterval deadline) {
+    if (!SetCaretTimeout(element,deadline)) return CGRectNull;
     CFRange range = CFRangeMake(index,length);
     AXValueRef input = AXValueCreate(kAXValueTypeCFRange,&range);
     if (!input) return CGRectNull;
@@ -87,18 +95,19 @@ static CGRect BoundsForTextRange(AXUIElementRef element, CFIndex index, CFIndex 
         ? rect : CGRectNull;
 }
 
-static NSNumber *LineForIndex(AXUIElementRef element, CFIndex index) {
+static NSNumber *LineForIndex(AXUIElementRef element, CFIndex index, NSTimeInterval deadline) {
+    if (!SetCaretTimeout(element,deadline)) return nil;
     CFTypeRef value = NULL;
     AXUIElementCopyParameterizedAttributeValue(element,kAXLineForIndexParameterizedAttribute,(__bridge CFNumberRef)@(index),&value);
     id line = CFBridgingRelease(value);
     return [line isKindOfClass:NSNumber.class] ? line : nil;
 }
 
-static CGRect InsertionBounds(AXUIElementRef element, CFIndex index) {
-    CGRect caret = BoundsForTextRange(element,index,0);
-    CGRect glyph = index < LONG_MAX ? BoundsForTextRange(element,index,1) : CGRectNull;
+static CGRect InsertionBounds(AXUIElementRef element, CFIndex index, NSTimeInterval deadline) {
+    CGRect caret = BoundsForTextRange(element,index,0,deadline);
+    CGRect glyph = index < LONG_MAX ? BoundsForTextRange(element,index,1,deadline) : CGRectNull;
     BOOL afterGlyph = CGRectIsNull(glyph);
-    if (afterGlyph && index > 0) glyph = BoundsForTextRange(element,index-1,1);
+    if (afterGlyph && index > 0) glyph = BoundsForTextRange(element,index-1,1,deadline);
     if (CGRectIsNull(glyph)) return caret;
 
     // Some AppKit fields return the insertion X correctly but report the preceding line's Y.
@@ -108,8 +117,8 @@ static CGRect InsertionBounds(AXUIElementRef element, CFIndex index) {
         if (insertionX >= CGRectGetMinX(glyph)-1 && insertionX <= CGRectGetMaxX(glyph)+1) {
             x = insertionX;
         } else if (afterGlyph) {
-            NSNumber *line = LineForIndex(element,index);
-            NSNumber *previous = LineForIndex(element,index-1);
+            NSNumber *line = LineForIndex(element,index,deadline);
+            NSNumber *previous = LineForIndex(element,index-1,deadline);
             if (line && previous && line.integerValue > previous.integerValue) {
                 return CGRectMake(insertionX,CGRectGetMaxY(glyph),0,CGRectGetHeight(glyph));
             }
@@ -118,12 +127,12 @@ static CGRect InsertionBounds(AXUIElementRef element, CFIndex index) {
     return CGRectMake(x,CGRectGetMinY(glyph),0,CGRectGetHeight(glyph));
 }
 
-static CGRect ElementBounds(AXUIElementRef element) {
+static CGRect ElementBounds(AXUIElementRef element, NSTimeInterval deadline) {
     CGRect rect;
-    if (ReadAXValue(AXAttribute(element,CFSTR("AXFrame")),kAXValueTypeCGRect,&rect) &&
+    if (ReadAXValue(AXAttribute(element,CFSTR("AXFrame"),deadline),kAXValueTypeCGRect,&rect) &&
         ValidTextBounds(rect) && rect.size.width > 0) return rect;
-    if (!ReadAXValue(AXAttribute(element,kAXPositionAttribute),kAXValueTypeCGPoint,&rect.origin) ||
-        !ReadAXValue(AXAttribute(element,kAXSizeAttribute),kAXValueTypeCGSize,&rect.size)) return CGRectNull;
+    if (!ReadAXValue(AXAttribute(element,kAXPositionAttribute,deadline),kAXValueTypeCGPoint,&rect.origin) ||
+        !ReadAXValue(AXAttribute(element,kAXSizeAttribute,deadline),kAXValueTypeCGSize,&rect.size)) return CGRectNull;
     return ValidTextBounds(rect) && rect.size.width > 0 ? rect : CGRectNull;
 }
 
@@ -139,25 +148,25 @@ static BOOL CaretOnScreen(CGRect rect, NSArray<NSScreen *> *screens, NSRect *res
     return NO;
 }
 
-static BOOL LocateFocusedCaret(id focused, NSArray<NSScreen *> *screens, NSRect *result) {
+static BOOL LocateFocusedCaret(id focused, NSArray<NSScreen *> *screens, NSRect *result, NSTimeInterval deadline) {
     NSRect fallback = NSZeroRect;
     BOOL hasFallback = NO;
     // Some editors put the focused child inside the accessible text control.
     for (NSUInteger depth = 0; depth < 3 && IsAXElement(focused); depth++) {
         AXUIElementRef element = (__bridge AXUIElementRef)focused;
-        AXUIElementSetMessagingTimeout(element,0.035);
-        id role = AXAttribute(element,kAXRoleAttribute);
+        if (NSProcessInfo.processInfo.systemUptime >= deadline) break;
+        id role = AXAttribute(element,kAXRoleAttribute,deadline);
         if ([role isEqual:(__bridge NSString *)kAXWindowRole] ||
             [role isEqual:(__bridge NSString *)kAXApplicationRole]) break;
         BOOL textControl = [role isEqual:(__bridge NSString *)kAXTextFieldRole] ||
             [role isEqual:(__bridge NSString *)kAXTextAreaRole] ||
             [role isEqual:(__bridge NSString *)kAXComboBoxRole];
         CFRange selected;
-        BOOL hasSelection = ReadAXValue(AXAttribute(element,kAXSelectedTextRangeAttribute),kAXValueTypeCFRange,&selected) &&
+        BOOL hasSelection = ReadAXValue(AXAttribute(element,kAXSelectedTextRangeAttribute,deadline),kAXValueTypeCFRange,&selected) &&
             selected.location >= 0 && selected.length >= 0 && selected.length <= LONG_MAX-selected.location;
-        CGRect field = textControl || hasSelection ? ElementBounds(element) : CGRectNull;
+        CGRect field = textControl || hasSelection ? ElementBounds(element,deadline) : CGRectNull;
         if (hasSelection) {
-            CGRect caret = InsertionBounds(element,selected.location+selected.length);
+            CGRect caret = InsertionBounds(element,selected.location+selected.length,deadline);
             if (!CGRectIsNull(caret) && !CGRectIsNull(field)) {
                 if (selected.location == 0 && selected.length == 0) {
                     caret.origin.y = MAX(caret.origin.y,CGRectGetMinY(field));
@@ -173,7 +182,7 @@ static BOOL LocateFocusedCaret(id focused, NSArray<NSScreen *> *screens, NSRect 
             CGRect nearInput = CGRectMake(CGRectGetMinX(field)+6,CGRectGetMinY(field),0,lineHeight);
             hasFallback = CaretOnScreen(nearInput,screens,&fallback);
         }
-        focused = AXAttribute(element,kAXParentAttribute);
+        focused = AXAttribute(element,kAXParentAttribute,deadline);
     }
     if (hasFallback) *result = fallback;
     return hasFallback;
@@ -184,16 +193,17 @@ BOOL OCGetCaret(pid_t pid, NSRect *result) {
     NSArray<NSScreen *> *screens = NSScreen.screens;
     if (!screens.count) return NO;
 
+    // Share one budget across the app, its focused elements, and the system fallback.
+    NSTimeInterval deadline = NSProcessInfo.processInfo.systemUptime + 0.045;
     AXUIElementRef app = AXUIElementCreateApplication(pid);
-    AXUIElementSetMessagingTimeout(app,0.035);
-    id focused = AXAttribute(app,kAXFocusedUIElementAttribute);
+    id focused = AXAttribute(app,kAXFocusedUIElementAttribute,deadline);
     CFRelease(app);
-    if (LocateFocusedCaret(focused,screens,result)) return YES;
+    if (LocateFocusedCaret(focused,screens,result,deadline)) return YES;
 
-    id systemFocused = SystemFocusedElement(pid);
+    id systemFocused = SystemFocusedElement(pid,deadline);
     return systemFocused && (!IsAXElement(focused) ||
         !CFEqual((__bridge CFTypeRef)systemFocused,(__bridge CFTypeRef)focused)) &&
-        LocateFocusedCaret(systemFocused,screens,result);
+        LocateFocusedCaret(systemFocused,screens,result,deadline);
 }
 
 NSArray<NSPasteboardItem *> *OCPasteboardItems(NSArray<NSDictionary *> *parts) {
@@ -251,7 +261,7 @@ BOOL OCPostPaste(pid_t destination, NSInteger version) {
 @property(nonatomic) BOOL limitHit;
 @property(nonatomic) BOOL inaccessible;
 @property(nonatomic) NSInteger retryChange;
-@property(nonatomic) NSInteger retryAttempts;
+@property(nonatomic) NSTimeInterval retryDeadline;
 @property(nonatomic) BOOL retryChangedApp;
 @property(nonatomic, copy, readwrite) NSString *status;
 @property(nonatomic, copy, readwrite) NSString *policy;
@@ -264,7 +274,7 @@ BOOL OCPostPaste(pid_t destination, NSInteger version) {
     [NSWorkspace.sharedWorkspace.notificationCenter addObserver:self
         selector:@selector(activeAppChanged:) name:NSWorkspaceDidActivateApplicationNotification object:nil];
     [self updateStatus];
-    self.timer = [NSTimer timerWithTimeInterval:0.125 target:self selector:@selector(tick:)
+    self.timer = [NSTimer timerWithTimeInterval:PollInterval target:self selector:@selector(tick:)
                                           userInfo:nil repeats:YES];
     self.timer.tolerance = 0.010;
     [NSRunLoop.mainRunLoop addTimer:self.timer forMode:NSRunLoopCommonModes];
@@ -278,6 +288,7 @@ BOOL OCPostPaste(pid_t destination, NSInteger version) {
     self.count = OCBoard().changeCount;
     self.front = NSWorkspace.sharedWorkspace.frontmostApplication.bundleIdentifier;
     self.switched = NO;
+    self.retryDeadline = 0;
 }
 
 - (void)retry {
@@ -289,14 +300,16 @@ BOOL OCPostPaste(pid_t destination, NSInteger version) {
 // Some apps clear the pasteboard first and write large payloads (such as images) or add the
 // supported types afterwards without raising the change count again. Look again for a short
 // while instead of dropping a copy that was only incomplete when first seen.
-- (void)retryIncompleteChange:(NSInteger)current previous:(NSInteger)previous changedApp:(BOOL)changedApp {
-    if (self.retryChange != current) {
+- (BOOL)retryIncompleteChange:(NSInteger)current previous:(NSInteger)previous changedApp:(BOOL)changedApp {
+    NSTimeInterval now = NSProcessInfo.processInfo.systemUptime;
+    if (!self.retryDeadline || self.retryChange != current) {
         self.retryChange = current;
-        self.retryAttempts = 0;
+        self.retryDeadline = now + RetryWindow;
     }
-    if (++self.retryAttempts > RetryLimit) return;
+    if (now >= self.retryDeadline) return NO;
     self.count = previous;
     self.retryChangedApp = changedApp;
+    return YES;
 }
 
 - (void)storageFull:(BOOL)full {
@@ -326,6 +339,15 @@ BOOL OCPostPaste(pid_t destination, NSInteger version) {
 }
 
 - (void)tick:(NSTimer *)timer {
+    [self captureNow];
+}
+
+- (BOOL)prepareClipboardWrite {
+    [self captureNow];
+    return self.count == OCBoard().changeCount;
+}
+
+- (void)captureNow {
     NSPasteboard *board = OCBoard();
     BOOL denied = [self updateStatus];
     if (self.inaccessible || denied) {
@@ -336,7 +358,7 @@ BOOL OCPostPaste(pid_t destination, NSInteger version) {
     NSString *front = NSWorkspace.sharedWorkspace.frontmostApplication.bundleIdentifier;
     NSInteger previous = self.count;
     BOOL changedApp = self.switched || ![self.front isEqualToString:front]
-        || (self.retryChange == current && self.retryChangedApp);
+        || (self.retryDeadline && self.retryChange == current && self.retryChangedApp);
     self.count = current;
     self.front = front;
     self.switched = NO;
@@ -365,12 +387,16 @@ BOOL OCPostPaste(pid_t destination, NSInteger version) {
     NSMutableArray<NSDictionary *> *entries = [NSMutableArray array];
     NSString *color = @"";
     NSUInteger size = 0;
+    BOOL incomplete = NO;
     for (NSUInteger index = 0; index < items.count; index++) {
         NSPasteboardItem *item = items[index];
         for (NSString *type in item.types) {
             if (![SupportedTypes() containsObject:type]) continue;
             NSData *bytes = [item dataForType:type];
-            if (!bytes) continue;
+            if (!bytes) {
+                incomplete = YES;
+                continue;
+            }
             if (bytes.length > ImageLimit - size || entries.count >= 1024) return;
             size += bytes.length;
             [entries addObject:@{@"item": @(index), @"type": type, @"data": bytes}];
@@ -390,10 +416,9 @@ BOOL OCPostPaste(pid_t destination, NSInteger version) {
         }
     }
     if (board.changeCount != current) return;
-    if (!entries.count) {
-        [self retryIncompleteChange:current previous:previous changedApp:changedApp];
-        return;
-    }
+    if ((incomplete || !entries.count) &&
+        [self retryIncompleteChange:current previous:previous changedApp:changedApp]) return;
+    if (!entries.count) return;
 
     OCPart *parts = calloc(entries.count, sizeof(OCPart));
     if (!parts) return;
@@ -406,8 +431,11 @@ BOOL OCPostPaste(pid_t destination, NSInteger version) {
         };
     }
     BOOL detect = [NSUserDefaults.standardUserDefaults boolForKey:@"OCDetectSensitive"];
-    oc_capture(parts, entries.count, detect, color.UTF8String);
+    OCCaptureResult result = oc_capture(parts, entries.count, detect, color.UTF8String);
     free(parts);
+    if (result == OCCaptureBusy) {
+        [self retryIncompleteChange:current previous:previous changedApp:changedApp];
+    }
 }
 @end
 

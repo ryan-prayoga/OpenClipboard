@@ -25,7 +25,8 @@ void oc_shortcut_fired(uint32_t identifier);
 
 bool oc_start_worker(const char *path);
 bool oc_send(const char *request);
-bool oc_capture(const OCPart *parts, size_t count, bool detect_sensitive, const char *color);
+typedef enum : uint8_t { OCCaptureRejected, OCCaptureAccepted, OCCaptureBusy } OCCaptureResult;
+OCCaptureResult oc_capture(const OCPart *parts, size_t count, bool detect_sensitive, const char *color);
 void oc_event(const char *event);
 void oc_payload(uint64_t ticket, int64_t id, bool sensitive, const OCPart *parts, size_t count);
 void oc_preview_image(uint64_t ticket, int64_t id, const uint8_t *data, size_t length);

@@ -246,7 +246,7 @@ static void SettingsTitle(NSView *pane, NSString *title) {
     self.picker.openSettings = ^{ [weakSelf showSettings]; };
     self.picker.quit = ^{ [weakSelf confirmQuit:nil]; };
     self.picker.openAccessibilityGuide = ^{ [weakSelf requestCaret:nil]; };
-    self.picker.didWriteClipboard = ^{ [weakSelf.recorder resetBaseline]; };
+    self.picker.prepareClipboardWrite = ^BOOL { return [weakSelf.recorder prepareClipboardWrite]; };
     self.recorder.statusChanged = ^{ [weakSelf refreshRecording]; };
     [self.recorder startTimer];
     self.shortcutID = oc_register_shortcut((uint16_t)[defaults integerForKey:ShortcutKey],
@@ -907,6 +907,7 @@ void oc_shortcut_fired(uint32_t identifier) {
     dispatch_async(dispatch_get_main_queue(), ^{
         OCApplication *application = applicationDelegate;
         if (application.shortcutID != identifier || application.captureMonitor) return;
+        [application.recorder captureNow];
         [application.picker showAtBottom:[NSUserDefaults.standardUserDefaults boolForKey:BottomMode]
                                   started:started];
     });

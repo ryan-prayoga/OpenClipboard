@@ -135,15 +135,22 @@ unsafe extern "C" fn oc_send(request: *const c_char) -> bool {
         .is_some_and(|worker| worker.try_send(Work::Request(request)).is_ok())
 }
 
+#[repr(u8)]
+enum CaptureResult {
+    Rejected,
+    Accepted,
+    Busy,
+}
+
 #[unsafe(no_mangle)]
 unsafe extern "C" fn oc_capture(
     parts: *const NativePart,
     count: usize,
     detect_sensitive: bool,
     color: *const c_char,
-) -> bool {
+) -> CaptureResult {
     if parts.is_null() || count == 0 || count > 1024 {
-        return false;
+        return CaptureResult::Rejected;
     }
     let parts = unsafe { slice::from_raw_parts(parts, count) };
     let mut bytes = 0usize;
@@ -151,20 +158,20 @@ unsafe extern "C" fn oc_capture(
     let mut accepted = Vec::with_capacity(count);
     for part in parts {
         let Some(mime) = (unsafe { string(part.mime) }) else {
-            return false;
+            return CaptureResult::Rejected;
         };
         if part.data.is_null() && part.length != 0 {
-            return false;
+            return CaptureResult::Rejected;
         }
         bytes = bytes.saturating_add(part.length);
         if bytes > IMAGE_LIMIT {
-            return false;
+            return CaptureResult::Rejected;
         }
         image |= matches!(mime.as_str(), "public.png" | "public.tiff");
         accepted.push((part, mime));
     }
     if !image && bytes > TEXT_LIMIT {
-        return false;
+        return CaptureResult::Rejected;
     }
     let mut parts: Vec<_> = accepted
         .into_iter()
@@ -181,11 +188,14 @@ unsafe extern "C" fn oc_capture(
         .collect();
     parts.sort_by(|a, b| a.item.cmp(&b.item).then(a.mime.cmp(&b.mime)));
     let color = unsafe { string(color) }.unwrap_or_default();
-    WORKER.get().is_some_and(|worker| {
-        worker
-            .try_send(Work::Capture(parts, detect_sensitive, color))
-            .is_ok()
-    })
+    let Some(worker) = WORKER.get() else {
+        return CaptureResult::Rejected;
+    };
+    match worker.try_send(Work::Capture(parts, detect_sensitive, color)) {
+        Ok(()) => CaptureResult::Accepted,
+        Err(mpsc::TrySendError::Full(_)) => CaptureResult::Busy,
+        Err(mpsc::TrySendError::Disconnected(_)) => CaptureResult::Rejected,
+    }
 }
 
 unsafe fn string(value: *const c_char) -> Option<String> {

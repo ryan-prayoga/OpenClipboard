@@ -1122,13 +1122,16 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
         BOOL direct = CGPreflightPostEventAccess();
         if (direct && ![self canPasteToOrigin]) return;
         NSInteger version;
+        if (self.prepareClipboardWrite && !self.prepareClipboardWrite()) {
+            [self setWarning:@"Clipboard sedang direkam. Coba tempel lagi sebentar."];
+            return;
+        }
         if (!OCWriteClipboard(parts,sensitive,&version)) {
             [self setWarning:@"Klip gagal disiapkan untuk ditempel."];
             return;
         }
         NSRunningApplication *destination = self.origin;
         NSScreen *screen = self.activePanel.screen;
-        if (self.didWriteClipboard) self.didWriteClipboard();
         [self dismissRestoringFocus:YES animate:!direct];
         if (!direct) {
             // No permission to send ⌘V: the clip is on the clipboard, so tell the user to paste it.
@@ -1220,16 +1223,18 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
 
 - (void)pasteTo:(NSRunningApplication *)destination clip:(int64_t)clip version:(NSInteger)version
           token:(uint64_t)token retries:(NSUInteger)retries {
-    if (token != self.panelToken || destination.terminated) return;
+    if (token != self.panelToken) return;
     pid_t target = destination.processIdentifier;
     pid_t front = NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier;
-    if (front == target) {
-        if (OCPostPaste(target,version) && !OCSend(@{@"action":@"pasted",@"id":@(clip)}))
+    if (!destination.terminated && front == target && OCPostPaste(target,version)) {
+        if (!OCSend(@{@"action":@"pasted",@"id":@(clip)}))
             NSLog(@"OpenClipboard could not update the pasted clip's position in history.");
-    } else if (front == NSProcessInfo.processInfo.processIdentifier && retries) {
+    } else if (!destination.terminated && front == NSProcessInfo.processInfo.processIdentifier && retries) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 30 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
             [self pasteTo:destination clip:clip version:version token:token retries:retries-1];
         });
+    } else {
+        [self showToast:@"Tempel otomatis gagal. Periksa clipboard sebelum menempel." onScreen:nil];
     }
 }
 
