@@ -40,7 +40,7 @@ static void FadeInFeedback(NSView *view) {
 }
 
 static CGFloat PanelChromeHeight(BOOL bottom) {
-    return (bottom ? BottomPanelInset+15 : CompactPanelInset+11) + OCToolbarHeight + ResultsTopGap + FooterHeight;
+    return (bottom ? BottomPanelInset+15 : CompactPanelInset+11) + OCToolbarHeight + ResultsTopGap;
 }
 static const CGFloat SearchFieldInset = 33;
 static const CGFloat SearchTextInset = 2;
@@ -228,6 +228,10 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
 @interface OCPicker () <NSSearchFieldDelegate, NSPopoverDelegate>
 @property(nonatomic, strong) NSPanel *panel;
 @property(nonatomic, strong) NSPanel *closingPanel;
+@property(nonatomic) CGFloat basePanelHeight;
+@property(nonatomic) CGFloat reservedFooterHeight;
+@property(nonatomic) BOOL compactAboveAnchor;
+@property(nonatomic) BOOL openingBottomPanel;
 @property(nonatomic, strong) NSRunningApplication *origin;
 @property(nonatomic, strong) NSSearchField *search;
 @property(nonatomic, strong) NSButton *action;
@@ -313,7 +317,9 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
     CGFloat screenInset = bottom ? BottomScreenInset : 12;
     NSRect room = NSInsetRect(screen.visibleFrame, screenInset, screenInset);
     CGFloat width = bottom ? NSWidth(room) : NSWidth(room) >= 520 ? 520 : MIN(432, NSWidth(room));
-    CGFloat chrome = PanelChromeHeight(bottom);
+    self.reservedFooterHeight = self.recordingStatus.length || self.undoTicket ? FooterHeight : 0;
+    self.openingBottomPanel = NO;
+    CGFloat chrome = PanelChromeHeight(bottom) + self.reservedFooterHeight;
     CGFloat targetHeight = chrome + (bottom ? [OCResults cardViewportHeight]
         : [OCResults compactViewportHeightWithin:CGFLOAT_MAX]);
     CGFloat height = MIN(targetHeight, room.size.height);
@@ -327,11 +333,13 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
         CGFloat upperEdge = (hasCaret ? NSMaxY(caret) : anchor.y)+gap;
         CGFloat above = NSMaxY(room)-upperEdge;
         BOOL placeBelow = below >= height || below >= above;
+        self.compactAboveAnchor = !placeBelow;
         height = MIN(height,MAX(140,placeBelow ? below : above));
         height = chrome + [OCResults compactViewportHeightWithin:height-chrome];
         y = Clamp(placeBelow ? anchor.y-gap-height : upperEdge,NSMinY(room),NSMaxY(room)-height);
     }
 
+    self.basePanelHeight = height - self.reservedFooterHeight;
     NSRect restingFrame = NSMakeRect(x,y,width,height);
     BOOL slideIn = bottom && !NSWorkspace.sharedWorkspace.accessibilityDisplayShouldReduceMotion;
     NSRect startFrame = slideIn ? NSOffsetRect(restingFrame,0,-BottomPanelEntranceDistance) : restingFrame;
@@ -356,7 +364,16 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
     [self installMonitors];
     [panel makeKeyAndOrderFront:nil];
     if ([panel makeFirstResponder:self.results]) ReportMetric("open", self.bottom, started);
-    if (slideIn) AnimatePanel(panel,restingFrame,1,BottomPanelEntranceDuration,nil);
+    if (slideIn) {
+        self.openingBottomPanel = YES;
+        __weak OCPicker *weakSelf = self;
+        AnimatePanel(panel,restingFrame,1,BottomPanelEntranceDuration,^{
+            OCPicker *picker = weakSelf;
+            if (picker.panel != panel) return;
+            picker.openingBottomPanel = NO;
+            [picker updateStatusLayout];
+        });
+    }
     [self fetchCatalog];
 }
 
@@ -367,7 +384,7 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
     CGFloat barY = h - edge - control;
     CGFloat buttonX = w - edge - control;
     CGFloat footerY = self.bottom ? 15 : 11;
-    CGFloat resultsBottom = footerY + FooterHeight;
+    CGFloat resultsBottom = footerY + self.reservedFooterHeight;
     CGFloat resultsTop = barY - ResultsTopGap;
     CGFloat resultsHeight = MAX(35,resultsTop-resultsBottom);
     __weak OCPicker *weakSelf = self;
@@ -424,6 +441,9 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
     self.undoButton = [self makeUndoButtonIn:view right:w-edge y:footerY-4];
     self.undoButton.hidden = YES;
     self.status.hidden = YES;
+    for (NSView *child in view.subviews) {
+        if (child != self.status && child != self.undoButton) child.autoresizingMask = NSViewMinYMargin;
+    }
     [self refreshUndoControls];
     [self setMessage:self.recordingStatus];
     self.results.picked = ^(NSInteger index, OCResultAction action) {
@@ -873,6 +893,35 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
     frame.size.width = MAX(0,NSWidth(label.superview.bounds)-2*edge-2-(self.undoButton.hidden ? 0 : 96));
     label.frame = frame;
     if (appeared && self.panel.visible) FadeInFeedback(label);
+    [self updateFooterSpace:hasText || !self.undoButton.hidden];
+}
+
+- (void)updateFooterSpace:(BOOL)visible {
+    CGFloat footer = visible ? FooterHeight : 0;
+    if (self.openingBottomPanel || footer == self.reservedFooterHeight) return;
+    self.reservedFooterHeight = footer;
+    NSRect frame = self.panel.frame;
+    NSScreen *screen = self.panel.screen ?: ScreenAt(frame.origin);
+    NSRect room = NSInsetRect(screen.visibleFrame,0,self.bottom ? BottomScreenInset : 12);
+    BOOL keepBottom = self.bottom || self.compactAboveAnchor;
+    CGFloat available = keepBottom ? NSMaxY(room)-NSMinY(frame) : NSMaxY(frame)-NSMinY(room);
+    CGFloat height = MIN(self.basePanelHeight+footer,MAX(self.basePanelHeight,available));
+    if (!keepBottom) frame.origin.y = NSMaxY(frame)-height;
+    frame.size.height = height;
+    [self.panel setFrame:frame display:NO];
+
+    NSRect viewport = self.scroll.frame;
+    CGFloat bottom = NSMinY(self.status.frame)+footer;
+    viewport.size.height = MAX(0,NSMaxY(viewport)-bottom);
+    viewport.origin.y = bottom;
+    self.scroll.frame = viewport;
+    if (!self.bottom) {
+        NSRect rail = self.tabs.frame;
+        rail.origin.y = bottom;
+        rail.size.height = viewport.size.height;
+        self.tabs.frame = rail;
+    }
+    [self.results layoutRows];
 }
 
 - (void)undoDelete:(id)sender {

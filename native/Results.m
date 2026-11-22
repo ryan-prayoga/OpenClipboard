@@ -7,6 +7,7 @@ static CGFloat const CardVerticalInset = 5;
 static CGFloat const PreviewHeight = 120;
 static CGFloat const CardInset = 12;
 static CGFloat const RowHeight = 47;
+static CGFloat const ImageRowHeight = 83;
 static CGFloat const RowInset = 5;
 
 static NSString *KindLabel(NSString *kind) {
@@ -168,6 +169,7 @@ static NSColor *Swatch(NSString *hex) {
 @end
 
 @interface OCResults () <NSDraggingSource>
+@property(nonatomic, copy) NSData *compactRowOffsets;
 @property(nonatomic, copy, readwrite) NSIndexSet *selectedIndexes;
 @property(nonatomic) NSInteger selectionAnchor;
 @property(nonatomic, copy) NSArray<OCRowAccessibility *> *accessibleRows;
@@ -221,11 +223,35 @@ static NSColor *Swatch(NSString *hex) {
 - (BOOL)acceptsFirstMouse:(NSEvent *)event { return YES; }
 - (BOOL)mouseDownCanMoveWindow { return NO; }
 
+- (void)setRows:(NSArray<NSDictionary *> *)rows {
+    _rows = [rows copy];
+    NSMutableData *offsets = [NSMutableData dataWithLength:(_rows.count + 1) * sizeof(CGFloat)];
+    CGFloat *positions = offsets.mutableBytes;
+    positions[0] = RowInset;
+    for (NSUInteger index = 0; index < _rows.count; index++) {
+        BOOL image = [_rows[index][@"kind"] isEqualToString:@"gambar"];
+        positions[index + 1] = positions[index] + (image ? ImageRowHeight : RowHeight);
+    }
+    self.compactRowOffsets = offsets;
+}
+
+- (NSInteger)compactRowIndexAtY:(CGFloat)y {
+    const CGFloat *positions = self.compactRowOffsets.bytes;
+    NSUInteger first = 0, end = self.rows.count;
+    while (first < end) {
+        NSUInteger mid = first + (end - first) / 2;
+        if (positions[mid + 1] <= y) first = mid + 1;
+        else end = mid;
+    }
+    return (NSInteger)first;
+}
+
 - (NSRect)rowFrame:(NSInteger)index {
     if (index < 0 || (NSUInteger)index >= self.rows.count) return NSZeroRect;
     if (self.horizontal) return NSMakeRect(3 + index * CardStep, CardVerticalInset, CardWidth, CardHeight);
-    CGFloat top = RowInset + index * RowHeight;
-    return NSMakeRect(3, top, MAX(0, self.bounds.size.width - 6), RowHeight - 3);
+    const CGFloat *positions = self.compactRowOffsets.bytes;
+    CGFloat top = positions[index];
+    return NSMakeRect(3, top, MAX(0, self.bounds.size.width - 6), positions[index + 1] - top - 3);
 }
 
 - (void)layoutRows {
@@ -282,7 +308,7 @@ static NSColor *Swatch(NSString *hex) {
 - (NSArray<NSDictionary *> *)visibleRows {
     NSRect visible = self.visibleRect;
     if (!self.horizontal) {
-        NSInteger first = MAX(0, (NSInteger)floor((NSMinY(visible) - RowInset) / RowHeight));
+        NSInteger first = [self compactRowIndexAtY:NSMinY(visible)];
         NSMutableArray *visibleRows = [NSMutableArray array];
         for (NSInteger i = first; (NSUInteger)i < self.rows.count; i++) {
             NSRect rect = [self rowFrame:i];
@@ -383,9 +409,8 @@ static NSColor *Swatch(NSString *hex) {
 }
 
 - (void)drawRect:(NSRect)dirtyRect {
-    CGFloat step = self.horizontal ? CardStep : RowHeight;
-    CGFloat origin = self.horizontal ? NSMinX(dirtyRect) - 3 : NSMinY(dirtyRect) - RowInset;
-    NSInteger first = MAX(0, (NSInteger)floor(origin / step) - 1);
+    NSInteger first = self.horizontal ? MAX(0, (NSInteger)floor((NSMinX(dirtyRect) - 3) / CardStep) - 1)
+                                      : [self compactRowIndexAtY:NSMinY(dirtyRect)];
     for (NSInteger index = first; (NSUInteger)index < self.rows.count; index++) {
         NSRect rect = [self rowFrame:index];
         if ((self.horizontal && NSMinX(rect) > NSMaxX(dirtyRect)) ||
@@ -443,13 +468,16 @@ static NSColor *Swatch(NSString *hex) {
     }
 
     CGFloat left = NSMinX(rect)+10, center = NSMidY(rect), right = NSMaxX(rect)-11;
-    NSRect tile = NSMakeRect(left,center-14,28,28);
-    if (imageKind && thumbnail) {
+    NSSize tileSize = imageKind ? NSMakeSize(132,64) : NSMakeSize(28,28);
+    NSRect tile = NSMakeRect(left,center-tileSize.height/2,tileSize.width,tileSize.height);
+    if (imageKind) {
         [[NSColor.labelColor colorWithAlphaComponent:0.06] setFill];
         [Rounded(tile,7) fill];
         [NSGraphicsContext saveGraphicsState];
         [Rounded(tile,7) addClip];
-        DrawImage(thumbnail,tile);
+        if (thumbnail) DrawImage(thumbnail,tile);
+        else DrawImage(SymbolTinted(KindIcon(kind),tint),
+                       NSMakeRect(NSMidX(tile)-9,center-9,18,18));
         [NSGraphicsContext restoreGraphicsState];
     } else {
         NSColor *tileColor = swatch ?: [tint colorWithAlphaComponent:dark ? 0.20 : 0.12];
@@ -458,10 +486,11 @@ static NSColor *Swatch(NSString *hex) {
         if (!swatch) DrawImage(SymbolTinted(KindIcon(kind),tint), NSInsetRect(tile,7,7));
     }
 
-    DrawText(imageKind ? @"Gambar" : title,NSMakeRect(left+39,center-16,MAX(0,right-left-95),18),13,
+    CGFloat textLeft = NSMaxX(tile)+11, textWidth = MAX(0,right-textLeft-56);
+    DrawText(imageKind ? @"Gambar" : title,NSMakeRect(textLeft,center-16,textWidth,18),13,
              NSFontWeightSemibold,NSColor.labelColor);
     NSString *detail = imageSize ?: (host.length ? host : sensitive ? @"Spasi untuk membuka" : KindLabel(kind));
-    DrawText(detail,NSMakeRect(left+39,center+2,MAX(0,right-left-95),16),11.5,
+    DrawText(detail,NSMakeRect(textLeft,center+2,textWidth,16),11.5,
              NSFontWeightMedium,Secondary());
     CGFloat timeTop = pinned ? center-15 : center-7;
     NSRect timeRect = NSMakeRect(right-56,timeTop,56,16);
@@ -550,8 +579,8 @@ static NSColor *Swatch(NSString *hex) {
 
 - (NSInteger)indexAt:(NSPoint)point {
     if (!self.rows.count) return -1;
-    CGFloat position = self.horizontal ? (point.x-3)/CardStep : (point.y-RowInset)/RowHeight;
-    NSInteger index = floor(position);
+    NSInteger index = self.horizontal ? (NSInteger)floor((point.x-3)/CardStep)
+                                      : [self compactRowIndexAtY:point.y];
     return NSPointInRect(point,[self rowFrame:index]) ? index : -1;
 }
 
