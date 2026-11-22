@@ -20,15 +20,15 @@ Rilis ini belum dinotariskan oleh Apple. Jika macOS memblokir saat pertama dibuk
 
 ## Dua tampilan riwayat
 
-Popup muncul di dekat kursor teks jika izin Accessibility aktif. Daftar klip ada di sebelah kanan, sementara koleksi bisa dipilih dari sisi kiri.
+Popup muncul di dekat kursor teks jika izin Accessibility aktif. Pilih koleksi dari sisi kiri. Klip gambar di daftar menampilkan miniatur dan ukuran dalam piksel.
 
 <p align="center">
-  <img src="docs/screenshots/popup.png" alt="Popup riwayat dengan daftar klip dan koleksi di sisi kiri" width="520">
+  <img src="docs/screenshots/popup.png" alt="Popup riwayat dengan miniatur klip Gambar berukuran 1024 × 1024 piksel" width="520">
 </p>
 
 Kalau lebih suka melihat isi klip sebagai kartu, pilih **Panel bawah layar** di Pengaturan. Kartu ditampilkan berjajar dan bisa digulir ke samping.
 
-![Panel bawah OpenClipboard menampilkan kartu teks, tautan, dan warna](docs/screenshots/riwayat.png)
+![Panel bawah OpenClipboard menampilkan kartu gambar, teks, tautan, dan warna](docs/screenshots/riwayat.png)
 
 ## Cara pakai
 
