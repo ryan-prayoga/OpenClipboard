@@ -10,7 +10,7 @@ OpenClipboard berguna saat kamu sudah menyalin teks lain dan perlu mengambil sal
 
 ## Unduh dan pasang
 
-[Unduh DMG untuk Mac Apple Silicon](https://github.com/ryan-prayoga/OpenClipboard/releases/latest). Dibutuhkan macOS 27.0 atau lebih baru.
+[Unduh DMG untuk Mac Apple Silicon](https://github.com/ryan-prayoga/OpenClipboard/releases/latest). Dibutuhkan macOS 26.0 atau lebih baru.
 
 1. Buka file DMG yang kamu unduh.
 2. Seret **OpenClipboard** ke folder **Applications**.
@@ -58,7 +58,7 @@ Gunakan tab **Privasi** untuk mengecualikan aplikasi tertentu atau mengatur dete
 
 ## Build dari source
 
-Skrip build menghasilkan aplikasi untuk Mac Apple Silicon dengan macOS 27.0 atau lebih baru. Siapkan Rust lewat rustup dan Xcode atau Command Line Tools dengan SDK macOS 27. Rustup mengikuti versi yang dipatok di [rust-toolchain.toml](rust-toolchain.toml).
+Skrip build menghasilkan aplikasi untuk Mac Apple Silicon dengan macOS 26.0 atau lebih baru. Siapkan Rust lewat rustup dan Xcode atau Command Line Tools dengan SDK macOS 26 atau lebih baru. Rustup mengikuti versi yang dipatok di [rust-toolchain.toml](rust-toolchain.toml).
 
 ```sh
 git clone https://github.com/ryan-prayoga/OpenClipboard.git

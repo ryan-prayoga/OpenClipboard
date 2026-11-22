@@ -164,7 +164,11 @@ static NSPanel *MakePanel(NSRect rect, NSString *title) {
         glass.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
         glass.style = NSGlassEffectViewStyleClear;
         glass.cornerRadius = radius;
-        glass.effectIsInteractive = YES;
+#if __MAC_OS_X_VERSION_MAX_ALLOWED >= 270000
+        if (@available(macOS 27.0, *)) {
+            glass.effectIsInteractive = YES;
+        }
+#endif
         NSView *content = [[NSView alloc] initWithFrame:bounds];
         content.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
         glass.contentView = content;
@@ -186,7 +190,11 @@ static void SetCollectionColorDot(NSMenuItem *item, NSString *key, int64_t ident
         [[NSBezierPath bezierPathWithOvalInRect:rect] fill];
         return YES;
     }];
-    item.preferredImageVisibility = NSMenuItemImageVisibilityVisible;
+#if __MAC_OS_X_VERSION_MAX_ALLOWED >= 270000
+    if (@available(macOS 27.0, *)) {
+        item.preferredImageVisibility = NSMenuItemImageVisibilityVisible;
+    }
+#endif
 }
 
 static void ReportMetric(const char *metric, BOOL bottom, NSTimeInterval started) {

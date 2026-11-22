@@ -41,7 +41,11 @@ NSView *OCToolbarSurface(NSRect frame, NSView *parent) {
 NSPopUpButton *OCGlassPopup(NSRect frame, NSView *parent) {
     NSGlassEffectView *glass = [[NSGlassEffectView alloc] initWithFrame:frame];
     glass.cornerRadius = OCToolbarRadius;
-    glass.effectIsInteractive = YES;
+#if __MAC_OS_X_VERSION_MAX_ALLOWED >= 270000
+    if (@available(macOS 27.0, *)) {
+        glass.effectIsInteractive = YES;
+    }
+#endif
     NSView *content = [[NSView alloc] initWithFrame:glass.bounds];
     glass.contentView = content;
     [parent addSubview:glass];

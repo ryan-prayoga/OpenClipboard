@@ -1,6 +1,6 @@
 use std::{env, path::Path, path::PathBuf, process::Command};
 
-const MACOS_VERSION: &str = "27.0";
+const MACOS_VERSION: &str = "26.0";
 
 fn build_permission_guide(out_dir: &Path) {
     let arch = match env::var("CARGO_CFG_TARGET_ARCH").as_deref() {
@@ -55,9 +55,22 @@ fn main() {
         ])
         .include(&out_dir)
         .flag("-fobjc-arc")
+        .flag("-Werror=unguarded-availability")
         .flag(format!("-mmacosx-version-min={MACOS_VERSION}"))
         .compile("openclipboard_app");
     println!("cargo:rustc-link-lib=static=openclipboard_permissions");
+
+    // Objective-C availability checks use a Clang runtime helper. Rust links
+    // with -nodefaultlibs, so Clang does not add its builtins automatically.
+    let builtins = Command::new("xcrun")
+        .args(["clang", "-print-file-name=libclang_rt.osx.a"])
+        .output()
+        .expect("could not locate Clang builtins via xcrun");
+    assert!(builtins.status.success(), "could not locate Clang builtins");
+    let builtins = String::from_utf8(builtins.stdout).expect("invalid Clang builtins path");
+    let builtins = Path::new(builtins.trim());
+    assert!(builtins.is_file(), "Clang builtins archive was not found");
+    println!("cargo:rustc-link-arg={}", builtins.display());
     // Unoptimized Swift objects autolink libswift_Concurrency through @rpath
     // (release builds use the absolute /usr/lib/swift path), so debug and test
     // binaries need the system Swift runtime directory as an rpath.
