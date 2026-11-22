@@ -2,7 +2,7 @@
 set -eu
 
 cd "$(dirname "$0")/.."
-export MACOSX_DEPLOYMENT_TARGET=26.0
+export MACOSX_DEPLOYMENT_TARGET=13.0
 # Keep Cargo's output at a known path even when the caller has a global target-dir.
 export CARGO_TARGET_DIR="$PWD/target"
 cargo build --locked --release --target aarch64-apple-darwin

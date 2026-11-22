@@ -150,29 +150,39 @@ static NSPanel *MakePanel(NSRect rect, NSString *title) {
         NSRect bounds = NSMakeRect(0,0,NSWidth(rect),NSHeight(rect));
         NSView *root = [[NSView alloc] initWithFrame:bounds];
 
-        // Sample the other windows behind the panel before applying the clear glass treatment.
-        NSRect materialFrame = NSInsetRect(bounds,2,2);
+        NSRect materialFrame = bounds;
+        CGFloat materialRadius = radius;
+        if (@available(macOS 26.0, *)) {
+            // Sample the windows behind the clear glass treatment.
+            materialFrame = NSInsetRect(bounds,2,2);
+            materialRadius -= 2;
+        }
+
         NSVisualEffectView *backdrop = [[NSVisualEffectView alloc] initWithFrame:materialFrame];
         backdrop.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
         backdrop.blendingMode = NSVisualEffectBlendingModeBehindWindow;
         backdrop.material = NSVisualEffectMaterialPopover;
         backdrop.state = NSVisualEffectStateActive;
-        backdrop.maskImage = GlassMask(materialFrame.size, radius - 2);
+        backdrop.maskImage = GlassMask(materialFrame.size, materialRadius);
         [root addSubview:backdrop];
 
-        NSGlassEffectView *glass = [[NSGlassEffectView alloc] initWithFrame:bounds];
-        glass.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-        glass.style = NSGlassEffectViewStyleClear;
-        glass.cornerRadius = radius;
-#if __MAC_OS_X_VERSION_MAX_ALLOWED >= 270000
-        if (@available(macOS 27.0, *)) {
-            glass.effectIsInteractive = YES;
-        }
-#endif
         NSView *content = [[NSView alloc] initWithFrame:bounds];
         content.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-        glass.contentView = content;
-        [root addSubview:glass];
+        if (@available(macOS 26.0, *)) {
+            NSGlassEffectView *glass = [[NSGlassEffectView alloc] initWithFrame:bounds];
+            glass.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+            glass.style = NSGlassEffectViewStyleClear;
+            glass.cornerRadius = radius;
+#if __MAC_OS_X_VERSION_MAX_ALLOWED >= 270000
+            if (@available(macOS 27.0, *)) {
+                glass.effectIsInteractive = YES;
+            }
+#endif
+            glass.contentView = content;
+            [root addSubview:glass];
+        } else {
+            [root addSubview:content];
+        }
         panel.contentView = root;
         panel.surfaceContent = content;
     }
@@ -646,8 +656,12 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
     if (restore && NSApp.isActive && origin && !origin.terminated &&
         origin.processIdentifier != NSProcessInfo.processInfo.processIdentifier &&
         NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier != origin.processIdentifier) {
-        [NSApp yieldActivationToApplication:origin];
-        [origin activateWithOptions:0];
+        if (@available(macOS 14.0, *)) {
+            [NSApp yieldActivationToApplication:origin];
+            [origin activateWithOptions:0];
+        } else {
+            [origin activateWithOptions:NSApplicationActivateIgnoringOtherApps];
+        }
     }
 }
 

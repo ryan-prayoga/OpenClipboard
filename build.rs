@@ -1,6 +1,6 @@
 use std::{env, path::Path, path::PathBuf, process::Command};
 
-const MACOS_VERSION: &str = "26.0";
+const MACOS_VERSION: &str = "13.0";
 
 fn build_permission_guide(out_dir: &Path) {
     let arch = match env::var("CARGO_CFG_TARGET_ARCH").as_deref() {

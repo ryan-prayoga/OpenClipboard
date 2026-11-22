@@ -10,7 +10,7 @@ OpenClipboard berguna saat kamu sudah menyalin teks lain dan perlu mengambil sal
 
 ## Unduh dan pasang
 
-[Unduh DMG untuk Mac Apple Silicon](https://github.com/ryan-prayoga/OpenClipboard/releases/latest). Dibutuhkan macOS 26.0 atau lebih baru.
+[Unduh DMG untuk Mac Apple Silicon](https://github.com/ryan-prayoga/OpenClipboard/releases/latest). Dibutuhkan macOS 13 Ventura atau lebih baru.
 
 1. Buka file DMG yang kamu unduh.
 2. Seret **OpenClipboard** ke folder **Applications**.
@@ -19,6 +19,8 @@ OpenClipboard berguna saat kamu sudah menyalin teks lain dan perlu mengambil sal
 Rilis ini belum dinotariskan oleh Apple. Jika macOS memblokir saat pertama dibuka, buka **System Settings → Privacy & Security** dan pilih **Open Anyway**. [Panduan Apple](https://support.apple.com/en-us/102445)
 
 ## Dua tampilan riwayat
+
+OpenClipboard memakai Liquid Glass di macOS 26 ke atas, seperti pada screenshot di bawah. Di macOS 13, 14, dan 15, panel memakai latar buram bawaan macOS.
 
 Popup muncul di dekat kursor teks jika izin Accessibility aktif. Pilih koleksi dari sisi kiri. Klip gambar di daftar menampilkan miniatur dan ukuran dalam piksel.
 
@@ -64,7 +66,7 @@ Gunakan tab **Privasi** untuk mengecualikan aplikasi tertentu atau mengatur dete
 
 ## Build dari source
 
-Skrip build menghasilkan aplikasi untuk Mac Apple Silicon dengan macOS 26.0 atau lebih baru. Siapkan Rust lewat rustup dan Xcode atau Command Line Tools dengan SDK macOS 26 atau lebih baru. Rustup mengikuti versi yang dipatok di [rust-toolchain.toml](rust-toolchain.toml).
+Skrip build menghasilkan aplikasi untuk Mac Apple Silicon dengan macOS 13 Ventura atau lebih baru. Siapkan Rust lewat rustup dan Xcode atau Command Line Tools dengan SDK macOS 26 atau lebih baru. Rustup mengikuti versi yang dipatok di [rust-toolchain.toml](rust-toolchain.toml).
 
 ```sh
 git clone https://github.com/ryan-prayoga/OpenClipboard.git

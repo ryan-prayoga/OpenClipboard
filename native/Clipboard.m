@@ -304,32 +304,31 @@ BOOL OCPostPaste(pid_t destination, NSInteger version) {
     [self updateStatus];
 }
 
-- (void)updateStatus {
-    [self updateStatusForBehavior:OCBoard().accessBehavior];
-}
-
-- (void)updateStatusForBehavior:(NSPasteboardAccessBehavior)behavior {
-    NSString *policy;
-    switch (behavior) {
-        case NSPasteboardAccessBehaviorAlwaysAllow: policy = @"Diizinkan"; break;
-        case NSPasteboardAccessBehaviorAlwaysDeny: policy = @"Dibatasi"; break;
-        case NSPasteboardAccessBehaviorAsk: policy = @"Tanya tiap dibaca"; break;
-        default: policy = @"Ikuti sistem"; break;
+- (BOOL)updateStatus {
+    NSString *policy = @"Ikuti sistem";
+    BOOL denied = NO;
+    if (@available(macOS 15.4, *)) {
+        switch (OCBoard().accessBehavior) {
+            case NSPasteboardAccessBehaviorAlwaysAllow: policy = @"Diizinkan"; break;
+            case NSPasteboardAccessBehaviorAlwaysDeny: policy = @"Dibatasi"; denied = YES; break;
+            case NSPasteboardAccessBehaviorAsk: policy = @"Tanya tiap dibaca"; break;
+            default: break;
+        }
     }
-    NSString *status = (behavior == NSPasteboardAccessBehaviorAlwaysDeny || self.inaccessible) ? @"Akses clipboard dibatasi"
+    NSString *status = (denied || self.inaccessible) ? @"Akses clipboard dibatasi"
         : self.limitHit ? @"Penyimpanan penuh" : @"";
     if (![self.policy isEqualToString:policy] || ![self.status isEqualToString:status]) {
         self.policy = policy;
         self.status = status;
         if (self.statusChanged) self.statusChanged();
     }
+    return denied;
 }
 
 - (void)tick:(NSTimer *)timer {
     NSPasteboard *board = OCBoard();
-    NSPasteboardAccessBehavior behavior = board.accessBehavior;
-    [self updateStatusForBehavior:behavior];
-    if (self.inaccessible || behavior == NSPasteboardAccessBehaviorAlwaysDeny) {
+    BOOL denied = [self updateStatus];
+    if (self.inaccessible || denied) {
         [self resetBaseline];
         return;
     }
@@ -349,8 +348,7 @@ BOOL OCPostPaste(pid_t destination, NSInteger version) {
 
     NSArray<NSPasteboardItem *> *items = board.pasteboardItems;
     if (!items.count) {
-        self.inaccessible = board.accessBehavior == NSPasteboardAccessBehaviorAlwaysDeny;
-        [self updateStatus];
+        self.inaccessible = [self updateStatus];
         if (!self.inaccessible) [self retryIncompleteChange:current previous:previous changedApp:changedApp];
         return;
     }

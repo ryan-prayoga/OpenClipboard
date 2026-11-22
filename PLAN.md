@@ -2,7 +2,7 @@
 
 OpenClipboard adalah pengelola clipboard macOS untuk pemakaian pribadi. Tekan satu shortcut global dari aplikasi yang sedang dipakai, lalu cari atau pilih klip di popup dekat kursor teks atau di panel bawah layar. Tekan Enter atau klik ganda klip untuk menempelkannya langsung ke aplikasi asal. OpenClipboard berjalan di background tanpa ikon menu bar atau Dock dan menyimpan riwayat secara lokal.
 
-Target pengujian pertama adalah Mac Apple Silicon dengan macOS 27.2.1. Bundle `.app` memakai identitas yang tetap agar izin macOS bisa diuji dari build ke build. Mulai v0.1.1, target minimum build adalah macOS 26.0.
+Target pengujian pertama adalah Mac Apple Silicon dengan macOS 27.2.1. Bundle `.app` memakai identitas yang tetap agar izin macOS bisa diuji dari build ke build. Mulai v0.1.2, target minimum build adalah macOS 13.0. Panel memakai material AppKit pada versi sebelum macOS 26.
 
 ## Pengalaman pengguna
 
