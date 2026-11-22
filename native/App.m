@@ -11,6 +11,7 @@ static NSString *const ShortcutKey = @"OCShortcutKey";
 static NSString *const ShortcutFlags = @"OCShortcutFlags";
 static NSString *const ShortcutLabel = @"OCShortcutLabel";
 static NSString *const BottomMode = @"OCBottomMode";
+NSString *const OCLiquidGlassPreference = @"OCLiquidGlass";
 static NSString *const HistoryLimit = @"OCHistoryLimit";
 static NSString *const HistoryRetentionDays = @"OCHistoryRetentionDays";
 static NSString *const HistoryStorageNote = @"Riwayat clipboard disimpan di Mac ini.";
@@ -55,6 +56,7 @@ void OCConfirmClearHistory(NSWindow *window, BOOL all, dispatch_block_t confirm)
 @property(nonatomic, strong) NSTextField *historyFeedback;
 @property(nonatomic, strong) NSButton *retryButton;
 @property(nonatomic, strong) NSTextField *historyLimit;
+@property(nonatomic, strong) NSView *historyRetentionContainer;
 @property(nonatomic, strong) NSPopUpButton *historyRetention;
 @property(nonatomic, strong) NSTextField *usage;
 @property(nonatomic, strong) NSTextField *clipboardPermission;
@@ -225,7 +227,7 @@ static void SettingsTitle(NSView *pane, NSString *title) {
     NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
     [defaults registerDefaults:@{
         ShortcutKey: @9, ShortcutFlags: @12, ShortcutLabel: @"⌘⇧V",
-        BottomMode: @NO, @"OCDetectSensitive": @YES, HistoryLimit: @500, HistoryRetentionDays: @0,
+        BottomMode: @NO, OCLiquidGlassPreference: @YES, @"OCDetectSensitive": @YES, HistoryLimit: @500, HistoryRetentionDays: @0,
     }];
 
     NSString *testDirectory = [defaults stringForKey:@"OCTestDataDirectory"];
@@ -340,7 +342,11 @@ static void SettingsTitle(NSView *pane, NSString *title) {
     [self refreshLogin];
     [self refreshExcluded];
     [self requestUsage];
-    [NSApp activate];
+    if (@available(macOS 14.0, *)) {
+        [NSApp activate];
+    } else {
+        [NSApp activateIgnoringOtherApps:YES];
+    }
     [self.settings makeKeyAndOrderFront:nil];
 }
 
@@ -480,7 +486,7 @@ static void SettingsTitle(NSView *pane, NSString *title) {
 - (void)buildGeneral:(NSView *)view {
     SettingsTitle(view, @"Umum");
     SettingsGroup(view,223,76);
-    SettingsGroup(view,82,130);
+    SettingsGroup(view,77,135);
     SettingsGroup(view,8,63);
 
     PlaceLabel(view, @"Shortcut global", NSMakeRect(15,262,154,20), NO);
@@ -490,7 +496,7 @@ static void SettingsTitle(NSView *pane, NSString *title) {
     PlaceButton(view, @"Pulihkan bawaan", self, @selector(resetShortcut:), NSMakeRect(336,254,130,32));
     self.shortcutFeedback = PlaceLabel(view, ShortcutHelp, NSMakeRect(15,233,450,18), YES);
 
-    PlaceLabel(view, @"Tampilan clipboard", NSMakeRect(18,181,192,20), NO).font =
+    PlaceLabel(view, @"Tampilan clipboard", NSMakeRect(18,185,192,20), NO).font =
         [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold];
     BOOL bottomMode = [NSUserDefaults.standardUserDefaults boolForKey:BottomMode];
     NSMutableArray<NSButton *> *modeButtons = [NSMutableArray array];
@@ -498,19 +504,32 @@ static void SettingsTitle(NSView *pane, NSString *title) {
     for (NSInteger mode = 0; mode < (NSInteger)titles.count; mode++) {
         CGFloat x = 18+mode*232;
         NSButton *button = [NSButton radioButtonWithTitle:titles[(NSUInteger)mode] target:self action:@selector(changeMode:)];
-        button.frame = NSMakeRect(x,154,212,21);
+        button.frame = NSMakeRect(x,161,212,21);
         button.tag = mode;
         button.state = mode == bottomMode ? NSControlStateValueOn : NSControlStateValueOff;
         [view addSubview:button];
         [modeButtons addObject:button];
 
-        OCModePreview *preview = [[OCModePreview alloc] initWithFrame:NSMakeRect(x,94,212,52)];
+        OCModePreview *preview = [[OCModePreview alloc] initWithFrame:NSMakeRect(x,108,212,47)];
         preview.bottom = mode == 1;
         preview.modeButton = button;
         [preview addGestureRecognizer:[[NSClickGestureRecognizer alloc] initWithTarget:preview action:@selector(selectMode:)]];
         [view addSubview:preview];
     }
     self.modeButtons = modeButtons;
+
+    NSButton *glass = [NSButton checkboxWithTitle:@"Gunakan Liquid Glass" target:self
+                                            action:@selector(toggleLiquidGlass:)];
+    glass.frame = NSMakeRect(18,82,210,22);
+    if (@available(macOS 26.0, *)) {
+        glass.state = [NSUserDefaults.standardUserDefaults boolForKey:OCLiquidGlassPreference]
+            ? NSControlStateValueOn : NSControlStateValueOff;
+        glass.toolTip = @"Berlaku saat riwayat dibuka lagi.";
+    } else {
+        glass.enabled = NO;
+        PlaceLabel(view, @"Perlu macOS 26 atau lebih baru.", NSMakeRect(233,83,227,20), YES);
+    }
+    [view addSubview:glass];
 
     self.loginButton = [NSButton checkboxWithTitle:@"Jalankan saat login" target:self action:@selector(toggleLogin:)];
     self.loginButton.frame = NSMakeRect(15,38,227,24);
@@ -542,16 +561,7 @@ static void SettingsTitle(NSView *pane, NSString *title) {
     PlaceButton(view, @"Simpan", self, @selector(saveLimit:), NSMakeRect(372,153,91,31));
 
     PlaceLabel(view, @"Durasi simpan klip biasa", NSMakeRect(15,120,235,21), NO);
-    self.historyRetention = OCGlassPopup(NSMakeRect(292,113,171,34),view);
-    for (NSArray *choice in @[@[@"Tanpa batas",@0],@[@"1 hari",@1],@[@"7 hari",@7],
-            @[@"30 hari",@30],@[@"90 hari",@90],@[@"1 tahun",@365]]) {
-        [self.historyRetention addItemWithTitle:choice[0]];
-        self.historyRetention.lastItem.tag = [choice[1] integerValue];
-    }
-    [self.historyRetention selectItemWithTag:[NSUserDefaults.standardUserDefaults integerForKey:HistoryRetentionDays]];
-    self.historyRetention.target = self;
-    self.historyRetention.action = @selector(changeRetention:);
-    [self.historyRetention setAccessibilityLabel:@"Durasi simpan klip biasa"];
+    [self buildHistoryRetention:view];
     PlaceLabel(view, @"Klip sematan dan klip di koleksi tetap disimpan.", NSMakeRect(15,94,448,18), YES);
 
     self.usage = PlaceLabel(view, @"", NSMakeRect(15,72,448,19), YES);
@@ -701,6 +711,28 @@ static void SettingsTitle(NSView *pane, NSString *title) {
     for (NSButton *button in self.modeButtons)
         button.state = button == sender ? NSControlStateValueOn : NSControlStateValueOff;
     [NSUserDefaults.standardUserDefaults setBool:sender.tag == 1 forKey:BottomMode];
+}
+
+- (void)toggleLiquidGlass:(NSButton *)sender {
+    [NSUserDefaults.standardUserDefaults setBool:sender.state == NSControlStateValueOn
+                                         forKey:OCLiquidGlassPreference];
+    [self buildHistoryRetention:self.historyRetentionContainer.superview];
+}
+
+- (void)buildHistoryRetention:(NSView *)view {
+    [self.historyRetentionContainer removeFromSuperview];
+    self.historyRetentionContainer = [[NSView alloc] initWithFrame:NSMakeRect(292,113,171,34)];
+    [view addSubview:self.historyRetentionContainer];
+    self.historyRetention = OCGlassPopup(self.historyRetentionContainer.bounds, self.historyRetentionContainer);
+    for (NSArray *choice in @[@[@"Tanpa batas",@0],@[@"1 hari",@1],@[@"7 hari",@7],
+            @[@"30 hari",@30],@[@"90 hari",@90],@[@"1 tahun",@365]]) {
+        [self.historyRetention addItemWithTitle:choice[0]];
+        self.historyRetention.lastItem.tag = [choice[1] integerValue];
+    }
+    [self.historyRetention selectItemWithTag:[NSUserDefaults.standardUserDefaults integerForKey:HistoryRetentionDays]];
+    self.historyRetention.target = self;
+    self.historyRetention.action = @selector(changeRetention:);
+    [self.historyRetention setAccessibilityLabel:@"Durasi simpan klip biasa"];
 }
 
 - (void)refreshLogin {

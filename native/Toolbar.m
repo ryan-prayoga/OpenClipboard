@@ -39,20 +39,25 @@ NSView *OCToolbarSurface(NSRect frame, NSView *parent) {
 }
 
 NSPopUpButton *OCGlassPopup(NSRect frame, NSView *parent) {
-    NSView *content;
+    NSView *surface = nil;
+    NSView *content = [[NSView alloc] initWithFrame:NSMakeRect(0,0,NSWidth(frame),NSHeight(frame))];
     if (@available(macOS 26.0, *)) {
-        NSGlassEffectView *glass = [[NSGlassEffectView alloc] initWithFrame:frame];
-        glass.cornerRadius = OCToolbarRadius;
+        if ([NSUserDefaults.standardUserDefaults boolForKey:OCLiquidGlassPreference]) {
+            NSGlassEffectView *glass = [[NSGlassEffectView alloc] initWithFrame:frame];
+            glass.cornerRadius = OCToolbarRadius;
 #if __MAC_OS_X_VERSION_MAX_ALLOWED >= 270000
-        if (@available(macOS 27.0, *)) {
-            glass.effectIsInteractive = YES;
-        }
+            if (@available(macOS 27.0, *)) {
+                glass.effectIsInteractive = YES;
+            }
 #endif
-        content = [[NSView alloc] initWithFrame:glass.bounds];
-        glass.contentView = content;
-        [parent addSubview:glass];
-    } else {
-        content = OCToolbarSurface(frame, parent);
+            glass.contentView = content;
+            [parent addSubview:glass];
+            surface = glass;
+        }
+    }
+    if (!surface) {
+        surface = OCToolbarSurface(frame, parent);
+        [surface addSubview:content];
     }
 
     NSPopUpButton *button = [[NSPopUpButton alloc] initWithFrame:NSInsetRect(content.bounds,10,0) pullsDown:NO];

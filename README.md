@@ -20,7 +20,7 @@ Rilis ini belum dinotariskan oleh Apple. Jika macOS memblokir saat pertama dibuk
 
 ## Dua tampilan riwayat
 
-OpenClipboard memakai Liquid Glass di macOS 26 ke atas, seperti pada screenshot di bawah. Di macOS 13, 14, dan 15, panel memakai latar buram bawaan macOS.
+Di macOS 26 ke atas, Liquid Glass aktif secara bawaan seperti pada screenshot di bawah. Matikan **Gunakan Liquid Glass** di tab **Umum** untuk memakai latar buram. Di macOS 13, 14, dan 15, latar buram otomatis dipakai.
 
 Popup muncul di dekat kursor teks jika izin Accessibility aktif. Pilih koleksi dari sisi kiri. Klip gambar di daftar menampilkan miniatur dan ukuran dalam piksel.
 
@@ -54,10 +54,10 @@ OpenClipboard menyimpan gambar yang tersedia di clipboard sebagai PNG atau TIFF,
 
 ## Pengaturan dan privasi
 
-Di tab **Umum**, kamu bisa mengganti pintasan global, memilih tampilan riwayat, dan mengaktifkan **Jalankan saat login**.
+Di tab **Umum**, kamu bisa mengganti pintasan global, memilih tampilan riwayat, mengatur Liquid Glass, dan mengaktifkan **Jalankan saat login**.
 
 <p align="center">
-  <img src="docs/screenshots/pengaturan.png" alt="Tab Umum dengan pengaturan pintasan, tampilan riwayat, dan jalankan saat login" width="712">
+  <img src="docs/screenshots/pengaturan.png" alt="Tab Umum dengan pengaturan pintasan, tampilan riwayat, Liquid Glass, dan jalankan saat login" width="712">
 </p>
 
 Riwayat disimpan secara lokal di `~/Library/Application Support/OpenClipboard/history.sqlite3`. Dari tab **Riwayat**, kamu bisa mengatur batas jumlah klip biasa dan berapa lama klip disimpan. Klip yang disematkan atau masuk koleksi dikecualikan dari batas riwayat biasa.

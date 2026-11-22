@@ -31,6 +31,8 @@ static inline BOOL OCPerformEditShortcut(NSEvent *event, NSResponder *target) {
     return [NSApp sendAction:action to:target from:nil];
 }
 
+extern NSString *const OCLiquidGlassPreference;
+
 BOOL OCSend(NSDictionary *command);
 void OCConfirmClearHistory(NSWindow *window, BOOL all, dispatch_block_t confirm);
 BOOL OCGetCaret(pid_t pid, NSRect *result);

@@ -150,39 +150,36 @@ static NSPanel *MakePanel(NSRect rect, NSString *title) {
         NSRect bounds = NSMakeRect(0,0,NSWidth(rect),NSHeight(rect));
         NSView *root = [[NSView alloc] initWithFrame:bounds];
 
-        NSRect materialFrame = bounds;
-        CGFloat materialRadius = radius;
+        NSView *content = [[NSView alloc] initWithFrame:bounds];
+        content.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+        NSView *surface = content;
         if (@available(macOS 26.0, *)) {
-            // Sample the windows behind the clear glass treatment.
-            materialFrame = NSInsetRect(bounds,2,2);
-            materialRadius -= 2;
+            if ([NSUserDefaults.standardUserDefaults boolForKey:OCLiquidGlassPreference]) {
+                NSGlassEffectView *glass = [[NSGlassEffectView alloc] initWithFrame:bounds];
+                glass.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+                glass.style = NSGlassEffectViewStyleClear;
+                glass.cornerRadius = radius;
+#if __MAC_OS_X_VERSION_MAX_ALLOWED >= 270000
+                if (@available(macOS 27.0, *)) {
+                    glass.effectIsInteractive = YES;
+                }
+#endif
+                glass.contentView = content;
+                surface = glass;
+            }
         }
 
+        // Inset the backdrop behind clear glass, which draws its own edges.
+        CGFloat inset = surface == content ? 0 : 2;
+        NSRect materialFrame = NSInsetRect(bounds,inset,inset);
         NSVisualEffectView *backdrop = [[NSVisualEffectView alloc] initWithFrame:materialFrame];
         backdrop.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
         backdrop.blendingMode = NSVisualEffectBlendingModeBehindWindow;
         backdrop.material = NSVisualEffectMaterialPopover;
         backdrop.state = NSVisualEffectStateActive;
-        backdrop.maskImage = GlassMask(materialFrame.size, materialRadius);
+        backdrop.maskImage = GlassMask(materialFrame.size, radius-inset);
         [root addSubview:backdrop];
-
-        NSView *content = [[NSView alloc] initWithFrame:bounds];
-        content.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-        if (@available(macOS 26.0, *)) {
-            NSGlassEffectView *glass = [[NSGlassEffectView alloc] initWithFrame:bounds];
-            glass.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-            glass.style = NSGlassEffectViewStyleClear;
-            glass.cornerRadius = radius;
-#if __MAC_OS_X_VERSION_MAX_ALLOWED >= 270000
-            if (@available(macOS 27.0, *)) {
-                glass.effectIsInteractive = YES;
-            }
-#endif
-            glass.contentView = content;
-            [root addSubview:glass];
-        } else {
-            [root addSubview:content];
-        }
+        [root addSubview:surface];
         panel.contentView = root;
         panel.surfaceContent = content;
     }
