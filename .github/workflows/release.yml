@@ -1,0 +1,57 @@
+name: Release macOS
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    runs-on: xcode-27
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '13.0'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Check release version
+        id: version
+        shell: bash
+        run: |
+          version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' native/Info.plist)
+          cargo_version=$(sed -n 's/^version = "\([^"]*\)"$/\1/p' Cargo.toml)
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          test "$version" = "$cargo_version"
+          if [[ "$GITHUB_EVENT_NAME" == push ]]; then
+            test "$GITHUB_REF_NAME" = "v$version"
+          fi
+          printf 'asset=dist/OpenClipboard-%s-arm64.dmg\n' "$version" >> "$GITHUB_OUTPUT"
+
+      - name: Test, build, and package
+        run: |
+          cargo fmt --check
+          cargo test --locked
+          ./scripts/build-app.sh
+          ./scripts/package-dmg.sh
+
+      - name: Publish GitHub release
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ASSET: ${{ steps.version.outputs.asset }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" "$ASSET" "$ASSET.sha256" \
+            --verify-tag --latest --title "OpenClipboard $GITHUB_REF_NAME" \
+            --notes "Untuk Mac Apple Silicon dengan macOS 13 atau lebih baru. Buka DMG dan seret OpenClipboard ke Applications. Rilis ini belum dinotariskan Apple."

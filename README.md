@@ -78,3 +78,14 @@ open dist/OpenClipboard.app
 Untuk menjalankan tes dari direktori repo, pakai `cargo test --locked`. Bagian riwayat dan penyimpanan ditulis dalam Rust, sedangkan antarmuka macOS memakai AppKit.
 
 Panduan izin Accessibility menyertakan kode dari AskForPermission. Pemberitahuan lisensinya ada di [native/AskForPermission/LICENSE](native/AskForPermission/LICENSE).
+
+## Menerbitkan rilis
+
+Samakan versi di `Cargo.toml`, entri `openclipboard` di `Cargo.lock`, dan `CFBundleShortVersionString` di `native/Info.plist`. Naikkan juga `CFBundleVersion`. Setelah perubahan versi masuk ke `main`, buat dan push tag yang sesuai. Contoh untuk versi 0.1.4:
+
+```sh
+git tag v0.1.4
+git push origin v0.1.4
+```
+
+GitHub Actions menjalankan tes, membuat DMG dan checksum SHA-256, lalu menerbitkan keduanya di GitHub Releases. Untuk mencoba build tanpa menerbitkan rilis, jalankan workflow **Release macOS** secara manual dari tab **Actions**.
