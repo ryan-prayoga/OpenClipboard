@@ -89,3 +89,23 @@ git push origin v0.1.5
 ```
 
 GitHub Actions menjalankan tes, membuat DMG dan checksum SHA-256, lalu menerbitkan keduanya di GitHub Releases. Untuk mencoba build tanpa menerbitkan rilis, jalankan workflow **Release macOS** secara manual dari tab **Actions**.
+
+### Pembaruan dari aplikasi
+
+Untuk mengaktifkan **Periksa pembaruan** → **Pasang pembaruan** di rilis:
+
+1. Unduh Sparkle dengan `sh scripts/fetch-sparkle.sh /path/ke/sparkle`. Jalankan
+   `bin/generate_keys --account openclipboard` dari direktori hasil unduhan.
+2. Simpan public key sebagai GitHub Actions variable
+   `OPENCLIPBOARD_UPDATE_PUBLIC_KEY`. Ekspor private key dengan
+   `bin/generate_keys --account openclipboard -x /path/ke/private-key` dan simpan
+   sebagai Actions secret `OPENCLIPBOARD_UPDATE_PRIVATE_KEY`.
+3. Pertahankan pasangan kunci yang sama untuk rilis berikutnya. Workflow
+   menandatangani DMG dan appcast setiap kali tag rilis dipublikasikan.
+
+Untuk menjaga identitas aplikasi di macOS antarversi, siapkan identitas
+**Developer ID Application** dan profil notarization di Keychain runner, lalu
+atur variables `OPENCLIPBOARD_SIGNING_IDENTITY` dan `OPENCLIPBOARD_NOTARY_PROFILE`.
+Sparkle tetap bisa memverifikasi pembaruan dengan EdDSA untuk build ad hoc,
+tetapi macOS dapat meminta izin Accessibility lagi. Build sebelum Sparkle
+perlu dipasang manual sekali untuk beralih ke pembaruan dari aplikasi.

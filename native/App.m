@@ -54,10 +54,23 @@ void OCConfirmClearHistory(NSWindow *window, BOOL all, dispatch_block_t confirm)
 
 static NSString *const ReleasesURL = @"https://github.com/ryan-prayoga/OpenClipboard/releases/latest";
 
+// Only release bundles include Sparkle. Keep ordinary Cargo builds independent of it.
+@protocol OCReleaseUpdater <NSObject>
+@property(nonatomic, readonly) BOOL canCheckForUpdates;
+- (BOOL)startUpdater:(NSError **)error;
+- (void)checkForUpdates;
+@end
+
+@protocol OCReleaseUpdaterController <NSObject>
+@property(nonatomic, readonly) id<OCReleaseUpdater> updater;
+- (instancetype)initWithStartingUpdater:(BOOL)startUpdater updaterDelegate:(id)updaterDelegate userDriverDelegate:(id)userDriverDelegate;
+@end
+
 @interface OCApplication : NSObject <NSApplicationDelegate, NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate>
 @property(nonatomic, strong) NSWindow *settings;
 @property(nonatomic, strong) NSButton *checkUpdateButton;
 @property(nonatomic) BOOL checkingRelease;
+@property(nonatomic, strong) id<OCReleaseUpdaterController> releaseUpdater;
 @property(nonatomic) CGFloat settingsTargetHeight;
 @property(nonatomic, strong) NSTabView *settingsPages;
 @property(nonatomic, copy) NSArray<NSButton *> *settingsNavigation;
@@ -543,10 +556,44 @@ static void SettingsTitle(NSView *pane, NSString *title) {
     self.checkUpdateButton = PlaceButton(view, OCText(@"Periksa pembaruan…", @"Check for Updates…"), self,
         @selector(checkForUpdates:), NSMakeRect(267,71,198,32));
     self.checkUpdateButton.enabled = !self.checkingRelease;
+    if (self.releaseUpdater) {
+        [self.checkUpdateButton bind:NSEnabledBinding toObject:self.releaseUpdater.updater
+                        withKeyPath:@"canCheckForUpdates" options:nil];
+    }
+}
+
+- (BOOL)startReleaseUpdater {
+    if (self.releaseUpdater) return YES;
+    NSBundle *host = NSBundle.mainBundle;
+    NSURL *url = [host.privateFrameworksURL URLByAppendingPathComponent:@"Sparkle.framework"];
+    NSBundle *framework = [NSBundle bundleWithURL:url];
+    NSError *error = nil;
+    if (![framework loadAndReturnError:&error]) {
+        NSLog(@"Could not load Sparkle: %@", error);
+        return NO;
+    }
+
+    Class controllerClass = [framework classNamed:@"SPUStandardUpdaterController"];
+    id<OCReleaseUpdaterController> controller = [[controllerClass alloc] initWithStartingUpdater:NO
+                                                                                 updaterDelegate:nil
+                                                                              userDriverDelegate:nil];
+    if (![controller.updater startUpdater:&error]) {
+        NSLog(@"Could not start Sparkle: %@", error);
+        return NO;
+    }
+    self.releaseUpdater = controller;
+    [self.checkUpdateButton bind:NSEnabledBinding toObject:controller.updater
+                    withKeyPath:@"canCheckForUpdates" options:nil];
+    return YES;
 }
 
 - (void)checkForUpdates:(id)sender {
     if (self.checkingRelease || self.settings.attachedSheet) return;
+    if ([NSBundle.mainBundle objectForInfoDictionaryKey:@"SUFeedURL"] && [self startReleaseUpdater]) {
+        id<OCReleaseUpdater> updater = self.releaseUpdater.updater;
+        if (updater.canCheckForUpdates) [updater checkForUpdates];
+        return;
+    }
     self.checkingRelease = YES;
     self.checkUpdateButton.enabled = NO;
     NSURL *url = [NSURL URLWithString:@"https://api.github.com/repos/ryan-prayoga/OpenClipboard/releases/latest"];
@@ -690,6 +737,7 @@ static void SettingsTitle(NSView *pane, NSString *title) {
     [self installMainMenu];
     [self.accessibilityGuide reloadLanguage];
     [self.recorder updateStatus];
+    if (self.releaseUpdater) [self.checkUpdateButton unbind:NSEnabledBinding];
     [self buildSettingsContent];
     [self showSettingsSection:self.settingsNavigation[section]];
     [self showSettings];

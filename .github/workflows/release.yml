@@ -45,12 +45,50 @@ jobs:
           printf 'notes=%s\n' "$notes" >> "$GITHUB_OUTPUT"
           printf 'asset=dist/OpenClipboard-%s-arm64.dmg\n' "$version" >> "$GITHUB_OUTPUT"
 
+      - name: Prepare in-app updates
+        if: github.event_name == 'push'
+        env:
+          PUBLIC_KEY: ${{ vars.OPENCLIPBOARD_UPDATE_PUBLIC_KEY }}
+          HAS_PRIVATE_KEY: ${{ secrets.OPENCLIPBOARD_UPDATE_PRIVATE_KEY != '' }}
+        run: |
+          if [[ -z "$PUBLIC_KEY" && "$HAS_PRIVATE_KEY" != true ]]; then
+            exit 0
+          fi
+          : "${PUBLIC_KEY:?Configure the Sparkle public key}"
+          test "$HAS_PRIVATE_KEY" = true
+          sparkle_dir=$(mktemp -d "$RUNNER_TEMP/openclipboard-sparkle.XXXXXXXX")
+          sh scripts/fetch-sparkle.sh "$sparkle_dir"
+          printf 'OPENCLIPBOARD_SPARKLE_DIR=%s\n' "$sparkle_dir" >> "$GITHUB_ENV"
+          printf 'OPENCLIPBOARD_UPDATE_PUBLIC_KEY=%s\n' "$PUBLIC_KEY" >> "$GITHUB_ENV"
+
       - name: Test, build, and package
+        env:
+          OPENCLIPBOARD_SIGNING_IDENTITY: ${{ vars.OPENCLIPBOARD_SIGNING_IDENTITY }}
+          OPENCLIPBOARD_NOTARY_PROFILE: ${{ vars.OPENCLIPBOARD_NOTARY_PROFILE }}
         run: |
           cargo fmt --check
           cargo test --locked
           ./scripts/build-app.sh
           ./scripts/package-dmg.sh
+
+      - name: Sign the update feed
+        if: github.event_name == 'push' && vars.OPENCLIPBOARD_UPDATE_PUBLIC_KEY != ''
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.OPENCLIPBOARD_UPDATE_PRIVATE_KEY }}
+          ASSET: ${{ steps.version.outputs.asset }}
+          NOTES: ${{ steps.version.outputs.notes }}
+        run: |
+          updates=$(mktemp -d "$RUNNER_TEMP/openclipboard-appcast.XXXXXXXX")
+          cp "$ASSET" "$updates/"
+          cp "$NOTES" "$updates/$(basename "$ASSET" .dmg).md"
+          printf '%s\n' "$SPARKLE_PRIVATE_KEY" | "$OPENCLIPBOARD_SPARKLE_DIR/bin/generate_appcast" \
+            --ed-key-file - --maximum-deltas 0 --embed-release-notes \
+            --download-url-prefix "https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME/" \
+            "$updates"
+          grep -q 'sparkle:edSignature=' "$updates/appcast.xml"
+          printf '%s\n' "$SPARKLE_PRIVATE_KEY" | "$OPENCLIPBOARD_SPARKLE_DIR/bin/sign_update" \
+            --verify --ed-key-file - "$updates/appcast.xml"
+          cp "$updates/appcast.xml" dist/appcast.xml
 
       - name: Publish GitHub release
         if: github.event_name == 'push'
@@ -59,6 +97,11 @@ jobs:
           ASSET: ${{ steps.version.outputs.asset }}
           NOTES: ${{ steps.version.outputs.notes }}
         run: |
-          gh release create "$GITHUB_REF_NAME" "$ASSET" "$ASSET.sha256" \
-            --verify-tag --latest --title "OpenClipboard $GITHUB_REF_NAME" \
+          assets=("$ASSET" "$ASSET.sha256")
+          if [[ -n "$OPENCLIPBOARD_SPARKLE_DIR" ]]; then
+            assets+=(dist/appcast.xml)
+          fi
+          gh release create "$GITHUB_REF_NAME" "${assets[@]}" \
+            --verify-tag --draft --title "OpenClipboard $GITHUB_REF_NAME" \
             --notes-file "$NOTES"
+          gh release edit "$GITHUB_REF_NAME" --draft=false --latest
