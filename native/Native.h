@@ -1,6 +1,33 @@
 #import <AppKit/AppKit.h>
 #import "Bridge.h"
 
+static NSString *const OCLanguagePreference = @"OCAppLanguage";
+static NSString *const OCSettingsWindowIdentifier = @"OCSettingsWindow";
+
+static inline BOOL OCUsesEnglish(void) {
+    return [[NSUserDefaults.standardUserDefaults stringForKey:OCLanguagePreference] isEqualToString:@"en"];
+}
+
+static inline NSString *OCText(NSString *indonesian, NSString *english) {
+    return OCUsesEnglish() ? english : indonesian;
+}
+
+static inline NSUInteger OCCharacterCount(NSString *text) {
+    __block NSUInteger count = 0;
+    [text enumerateSubstringsInRange:NSMakeRange(0,text.length)
+        options:NSStringEnumerationByComposedCharacterSequences | NSStringEnumerationSubstringNotRequired
+        usingBlock:^(__unused NSString *substring, __unused NSRange substringRange,
+                     __unused NSRange enclosingRange, __unused BOOL *stop) {
+            count++;
+        }];
+    return count;
+}
+
+static inline NSString *OCCharacterCountLabel(NSUInteger count) {
+    NSString *format = OCUsesEnglish() ? (count == 1 ? @"%lu character" : @"%lu characters") : @"%lu karakter";
+    return [NSString localizedStringWithFormat:format,(unsigned long)count];
+}
+
 @class OCPicker;
 @class OCRecorder;
 
@@ -37,7 +64,7 @@ BOOL OCSend(NSDictionary *command);
 void OCConfirmClearHistory(NSWindow *window, BOOL all, dispatch_block_t confirm);
 BOOL OCGetCaret(pid_t pid, NSRect *result);
 NSArray<NSPasteboardItem *> *OCPasteboardItems(NSArray<NSDictionary *> *parts);
-BOOL OCWriteClipboard(NSArray<NSDictionary *> *parts, BOOL sensitive, NSInteger *version);
+BOOL OCWriteClipboard(NSArray<NSDictionary *> *parts, NSInteger *version);
 BOOL OCPostPaste(pid_t destination, NSInteger version);
 
 @interface OCRecorder : NSObject
@@ -45,6 +72,7 @@ BOOL OCPostPaste(pid_t destination, NSInteger version);
 @property(nonatomic, copy, readonly) NSString *policy;
 @property(nonatomic, copy) void (^statusChanged)(void);
 - (void)startTimer;
+- (BOOL)updateStatus;
 - (void)retry;
 - (void)resetBaseline;
 - (void)captureNow;
@@ -54,7 +82,6 @@ BOOL OCPostPaste(pid_t destination, NSInteger version);
 
 @interface OCPicker : NSObject
 @property(nonatomic, copy) dispatch_block_t openSettings;
-@property(nonatomic, copy) dispatch_block_t openAccessibilityGuide;
 @property(nonatomic, copy) dispatch_block_t quit;
 @property(nonatomic, copy) NSString *recordingStatus;
 @property(nonatomic, copy) NSString *shortcutLabel;
@@ -62,7 +89,7 @@ BOOL OCPostPaste(pid_t destination, NSInteger version);
 - (void)dismissRestoringFocus:(BOOL)restore;
 - (void)receiveEvent:(NSDictionary *)event;
 - (void)receivePayload:(NSArray<NSDictionary *> *)parts ticket:(uint64_t)ticket
-                    id:(int64_t)clip sensitive:(BOOL)sensitive;
+                    id:(int64_t)clip;
 - (void)receiveThumbnail:(NSData *)image ticket:(uint64_t)ticket id:(int64_t)clip;
 @property(nonatomic, copy) BOOL (^prepareClipboardWrite)(void);
 @end

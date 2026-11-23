@@ -57,12 +57,20 @@ static NSImage *GuideSymbol(NSString *name, CGFloat size) {
 @end
 
 @implementation OCAccessibilityGuide
+- (void)reloadLanguage {
+    NSScreen *screen = self.panel.screen;
+    BOOL visible = self.panel.visible;
+    [self.panel close];
+    self.panel = nil;
+    if (visible) [self showFromScreen:screen];
+}
+
 - (void)buildPanel {
     NSRect bounds = NSMakeRect(0, 0, 362, 198);
     self.panel = [[OCAccessibilityPanel alloc] initWithContentRect:bounds
         styleMask:NSWindowStyleMaskBorderless | NSWindowStyleMaskNonactivatingPanel
         backing:NSBackingStoreBuffered defer:NO];
-    self.panel.title = @"Panduan Accessibility";
+    self.panel.title = OCText(@"Panduan Accessibility", @"Accessibility Guide");
     self.panel.delegate = self;
     self.panel.releasedWhenClosed = NO;
     self.panel.hidesOnDeactivate = NO;
@@ -90,11 +98,11 @@ static NSImage *GuideSymbol(NSString *name, CGFloat size) {
     self.prompt = [[NSView alloc] initWithFrame:bounds];
     [glass addSubview:self.prompt];
 
-    NSTextField *title = OCLabel(@"Aktifkan Accessibility", 20, NSFontWeightSemibold);
+    NSTextField *title = OCLabel(OCText(@"Aktifkan Accessibility", @"Enable Accessibility"), 20, NSFontWeightSemibold);
     title.frame = NSMakeRect(18, 151, 290, 28);
     [self.prompt addSubview:title];
 
-    NSTextField *purpose = OCLabel(@"Untuk menempelkan klip langsung ke aplikasi lain.", 12, NSFontWeightRegular);
+    NSTextField *purpose = OCLabel(OCText(@"Untuk menempelkan klip langsung ke aplikasi lain.", @"Paste clips directly into other apps."), 12, NSFontWeightRegular);
     purpose.textColor = NSColor.secondaryLabelColor;
     purpose.frame = NSMakeRect(18, 130, 326, 18);
     [self.prompt addSubview:purpose];
@@ -105,7 +113,7 @@ static NSImage *GuideSymbol(NSString *name, CGFloat size) {
     close.bordered = NO;
     close.contentTintColor = NSColor.secondaryLabelColor;
     close.keyEquivalent = @"\e";
-    close.toolTip = @"Tutup panduan";
+    close.toolTip = OCText(@"Tutup panduan", @"Close guide");
     [close setAccessibilityLabel:close.toolTip];
     [self.prompt addSubview:close];
 
@@ -121,7 +129,7 @@ static NSImage *GuideSymbol(NSString *name, CGFloat size) {
         if (OCAccessibilityReady()) {
             [guide showSuccess];
         } else {
-            guide.instructions.stringValue = @"Nyalakan sakelar OpenClipboard di daftar Aksesibilitas.";
+            guide.instructions.stringValue = OCText(@"Nyalakan sakelar OpenClipboard di daftar Aksesibilitas.", @"Turn on OpenClipboard in the Accessibility list.");
         }
     };
     [self.prompt addSubview:self.dragIcon];
@@ -133,14 +141,14 @@ static NSImage *GuideSymbol(NSString *name, CGFloat size) {
     [self updateInstructionsForSettingsLink:YES];
     [self.prompt addSubview:self.instructions];
 
-    NSButton *open = [NSButton buttonWithTitle:@"Buka Pengaturan" image:GuideSymbol(@"arrow.up.right", 9)
+    NSButton *open = [NSButton buttonWithTitle:OCText(@"Buka Pengaturan", @"Open Settings") image:GuideSymbol(@"arrow.up.right", 9)
                                         target:self action:@selector(openSettings:)];
     open.frame = NSMakeRect(213, 15, 132, 30);
     open.imagePosition = NSImageTrailing;
     open.bezelStyle = NSBezelStyleRounded;
     open.controlSize = NSControlSizeSmall;
     open.font = [NSFont systemFontOfSize:11 weight:NSFontWeightMedium];
-    [open setAccessibilityLabel:@"Buka Pengaturan Sistem"];
+    [open setAccessibilityLabel:OCText(@"Buka Pengaturan Sistem", @"Open System Settings")];
     [self.prompt addSubview:open];
 
     self.success = [[NSView alloc] initWithFrame:bounds];
@@ -154,12 +162,12 @@ static NSImage *GuideSymbol(NSString *name, CGFloat size) {
     [check setAccessibilityElement:NO];
     [self.success addSubview:check];
 
-    NSTextField *approved = OCLabel(@"Accessibility aktif", 21, NSFontWeightSemibold);
+    NSTextField *approved = OCLabel(OCText(@"Accessibility aktif", @"Accessibility enabled"), 21, NSFontWeightSemibold);
     approved.frame = NSMakeRect(18, 65, 326, 28);
     approved.alignment = NSTextAlignmentCenter;
     [self.success addSubview:approved];
 
-    NSTextField *caption = OCLabel(@"Klip bisa langsung ditempel ke aplikasi lain.", 13, NSFontWeightRegular);
+    NSTextField *caption = OCLabel(OCText(@"Klip bisa langsung ditempel ke aplikasi lain.", @"You can now paste clips directly into other apps."), 13, NSFontWeightRegular);
     caption.textColor = NSColor.secondaryLabelColor;
     caption.frame = NSMakeRect(18, 44, 326, 19);
     caption.alignment = NSTextAlignmentCenter;
@@ -239,7 +247,7 @@ static NSImage *GuideSymbol(NSString *name, CGFloat size) {
     }
 
     NSAccessibilityPostNotificationWithUserInfo(self.success, NSAccessibilityAnnouncementRequestedNotification, @{
-        NSAccessibilityAnnouncementKey: @"Accessibility aktif",
+        NSAccessibilityAnnouncementKey: OCText(@"Accessibility aktif", @"Accessibility enabled"),
         NSAccessibilityPriorityKey: @(NSAccessibilityPriorityMedium)
     });
     if (self.permissionChanged) self.permissionChanged();
@@ -253,12 +261,12 @@ static NSImage *GuideSymbol(NSString *name, CGFloat size) {
 
 - (void)updateInstructionsForSettingsLink:(BOOL)opened {
     if (!opened) {
-        self.instructions.stringValue = @"Buka Privasi & Keamanan →\nAksesibilitas, lalu klik +.";
+        self.instructions.stringValue = OCText(@"Buka Privasi & Keamanan →\nAksesibilitas, lalu klik +.", @"Open Privacy & Security →\nAccessibility, then click +.");
         return;
     }
     self.instructions.stringValue = self.dragIcon.canDrag
-        ? @"Atau tambahkan lewat tombol +.\nLalu nyalakan sakelarnya."
-        : @"Klik +, pilih OpenClipboard.app,\nlalu nyalakan sakelarnya.";
+        ? OCText(@"Atau tambahkan lewat tombol +.\nLalu nyalakan sakelarnya.", @"Or add it with the + button.\nThen turn it on.")
+        : OCText(@"Klik +, pilih OpenClipboard.app,\nlalu nyalakan sakelarnya.", @"Click +, select OpenClipboard.app,\nthen turn it on.");
 }
 
 - (void)openSettings:(id)sender {

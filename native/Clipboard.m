@@ -222,12 +222,11 @@ NSArray<NSPasteboardItem *> *OCPasteboardItems(NSArray<NSDictionary *> *parts) {
     return items;
 }
 
-BOOL OCWriteClipboard(NSArray<NSDictionary *> *parts, BOOL sensitive, NSInteger *version) {
+BOOL OCWriteClipboard(NSArray<NSDictionary *> *parts, NSInteger *version) {
     NSArray<NSPasteboardItem *> *items = OCPasteboardItems(parts);
     if (!items.count) return NO;
     for (NSPasteboardItem *item in items) {
         [item setData:[NSData data] forType:OCOwnWrite];
-        if (sensitive) [item setData:[NSData data] forType:OCConcealed];
     }
     NSPasteboard *pasteboard = OCBoard();
     [pasteboard clearContents];
@@ -318,18 +317,18 @@ BOOL OCPostPaste(pid_t destination, NSInteger version) {
 }
 
 - (BOOL)updateStatus {
-    NSString *policy = @"Ikuti sistem";
+    NSString *policy = OCText(@"Ikuti sistem", @"System default");
     BOOL denied = NO;
     if (@available(macOS 15.4, *)) {
         switch (OCBoard().accessBehavior) {
-            case NSPasteboardAccessBehaviorAlwaysAllow: policy = @"Diizinkan"; break;
-            case NSPasteboardAccessBehaviorAlwaysDeny: policy = @"Dibatasi"; denied = YES; break;
-            case NSPasteboardAccessBehaviorAsk: policy = @"Tanya tiap dibaca"; break;
+            case NSPasteboardAccessBehaviorAlwaysAllow: policy = OCText(@"Diizinkan", @"Allowed"); break;
+            case NSPasteboardAccessBehaviorAlwaysDeny: policy = OCText(@"Dibatasi", @"Restricted"); denied = YES; break;
+            case NSPasteboardAccessBehaviorAsk: policy = OCText(@"Tanya tiap dibaca", @"Ask each time"); break;
             default: break;
         }
     }
-    NSString *status = (denied || self.inaccessible) ? @"Akses clipboard dibatasi"
-        : self.limitHit ? @"Penyimpanan penuh" : @"";
+    NSString *status = (denied || self.inaccessible) ? OCText(@"Akses clipboard dibatasi", @"Clipboard access restricted")
+        : self.limitHit ? OCText(@"Penyimpanan penuh", @"Storage full") : @"";
     if (![self.policy isEqualToString:policy] || ![self.status isEqualToString:status]) {
         self.policy = policy;
         self.status = status;
@@ -430,8 +429,7 @@ BOOL OCPostPaste(pid_t destination, NSInteger version) {
             .data = bytes.bytes, .length = bytes.length,
         };
     }
-    BOOL detect = [NSUserDefaults.standardUserDefaults boolForKey:@"OCDetectSensitive"];
-    OCCaptureResult result = oc_capture(parts, entries.count, detect, color.UTF8String);
+    OCCaptureResult result = oc_capture(parts, entries.count, color.UTF8String);
     free(parts);
     if (result == OCCaptureBusy) {
         [self retryIncompleteChange:current previous:previous changedApp:changedApp];
@@ -485,3 +483,10 @@ OCThumbnail oc_thumbnail(const uint8_t *data, size_t length) {
 }
 
 void oc_free_thumbnail(uint8_t *data) { free(data); }
+
+size_t oc_character_count(const uint8_t *data, size_t length) {
+    @autoreleasepool {
+        NSString *text = [[NSString alloc] initWithBytes:data length:length encoding:NSUTF8StringEncoding];
+        return OCCharacterCount(text);
+    }
+}

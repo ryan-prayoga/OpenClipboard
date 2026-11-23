@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 use std::fs::{DirBuilder, File, OpenOptions};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::Path;
@@ -8,7 +8,7 @@ use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-use crate::clip::{self, DISK_LIMIT, IMAGE_LIMIT, Part, Summary, Thumbnail};
+use crate::clip::{self, DISK_LIMIT, Part, Summary, Thumbnail};
 
 const MILLIS_PER_DAY: i64 = 86_400_000;
 
@@ -21,7 +21,6 @@ pub(crate) enum Error {
     CollectionColor,
     UndoUnavailable,
     UndoFull,
-    NotManuallySensitive,
 }
 
 impl From<rusqlite::Error> for Error {
@@ -44,23 +43,11 @@ pub(crate) struct Collection {
 pub(crate) struct Catalog {
     pub clips: Vec<Summary>,
     pub collections: Vec<Collection>,
-    pub usage: usize,
-}
-
-struct SessionClip {
-    parts: Vec<Part>,
-    digest: Vec<u8>,
-    summary: Summary,
-    restore_color: Option<String>,
 }
 
 pub(crate) struct History {
     disk: Connection,
     _owner: Option<File>,
-    session: HashMap<i64, SessionClip>,
-    deleted_session: Vec<SessionClip>,
-    next_session_id: i64,
-    limit: usize,
     retention_ms: Option<i64>,
 }
 
@@ -89,7 +76,7 @@ impl History {
         Ok(history)
     }
 
-    fn new(disk: Connection) -> Result<Self> {
+    fn new(mut disk: Connection) -> Result<Self> {
         disk.execute_batch(
             "PRAGMA foreign_keys=ON;
              PRAGMA journal_mode=DELETE;
@@ -109,7 +96,8 @@ impl History {
                  height INTEGER NOT NULL,
                  copied INTEGER NOT NULL,
                  pasted INTEGER,
-                 pinned INTEGER NOT NULL DEFAULT 0
+                 pinned INTEGER NOT NULL DEFAULT 0,
+                 character_count INTEGER
              );
              CREATE TABLE IF NOT EXISTS collections (
                  id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -141,13 +129,36 @@ impl History {
                 [],
             )?;
         }
+        let has_character_count: bool = disk.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('clips') WHERE name='character_count')",
+            [],
+            |row| row.get(0),
+        )?;
+        if !has_character_count {
+            let transaction = disk.transaction()?;
+            transaction.execute("ALTER TABLE clips ADD COLUMN character_count INTEGER", [])?;
+            let ids = {
+                let mut select =
+                    transaction.prepare("SELECT id FROM clips WHERE kind <> 'gambar'")?;
+                select
+                    .query_map([], |row| row.get::<_, i64>(0))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?
+            };
+            let mut select = transaction.prepare("SELECT parts FROM clips WHERE id=?1")?;
+            let mut update =
+                transaction.prepare("UPDATE clips SET character_count=?2 WHERE id=?1")?;
+            for id in ids {
+                let raw: Vec<u8> = select.query_row([id], |row| row.get(0))?;
+                if let Ok(parts) = bincode::deserialize::<Vec<Part>>(&raw) {
+                    update.execute(params![id, clip::character_count(&parts)])?;
+                }
+            }
+            drop((select, update));
+            transaction.commit()?;
+        }
         Ok(Self {
             disk,
             _owner: None,
-            session: HashMap::new(),
-            deleted_session: Vec::new(),
-            next_session_id: -1,
-            limit: 500,
             retention_ms: None,
         })
     }
@@ -155,53 +166,18 @@ impl History {
     pub fn capture(
         &mut self,
         parts: Vec<Part>,
-        detect: bool,
         color: String,
         thumbnail: impl FnOnce(&[Part]) -> Thumbnail,
     ) -> Result<()> {
         let raw = bincode::serialize(&parts).map_err(|_| Error::Storage)?;
         let digest = Sha256::digest(&raw).to_vec();
         let copied = now();
-        if let Some(clip) = self.session.values_mut().find(|clip| clip.digest == digest) {
-            clip.summary.copied = copied;
-            clip.summary.last_used = copied;
-            return Ok(());
-        }
-        let existing = self
+        let existing: Option<i64> = self
             .disk
             .query_row("SELECT id FROM clips WHERE digest = ?1", [&digest], |row| {
                 row.get(0)
             })
             .optional()?;
-
-        let was_sensitive = self
-            .deleted_session
-            .iter()
-            .any(|clip| clip.digest == digest);
-        if was_sensitive || (detect && clip::sensitive(&parts)) {
-            if let Some(id) = existing {
-                self.move_to_sensitive_session(id, false)?;
-                if let Some(clip) = self.session.get_mut(&id) {
-                    clip.summary.copied = copied;
-                    clip.summary.last_used = copied;
-                }
-                return Ok(());
-            }
-            let id = self.next_session_id;
-            let bytes = bytes_of(&parts);
-            self.ensure_session_space(bytes)?;
-            self.session.insert(
-                id,
-                SessionClip {
-                    parts,
-                    digest,
-                    summary: sensitive_summary(id, copied, copied, false, bytes, Vec::new(), false),
-                    restore_color: None,
-                },
-            );
-            self.next_session_id -= 1;
-            return Ok(());
-        }
 
         if let Some(id) = existing {
             self.disk.execute(
@@ -218,22 +194,27 @@ impl History {
         }
         let (kind, title, search, color) = clip::metadata(&parts, color);
         let bytes = bytes_of(&parts) + thumbnail.bytes.len();
+        let character_count = if kind == "gambar" {
+            None
+        } else {
+            clip::character_count(&parts)
+        };
         let transaction = self.disk.transaction()?;
         transaction.execute(
-            "INSERT INTO clips (digest,parts,bytes,kind,title,search,color,thumbnail,width,height,copied)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+            "INSERT INTO clips (digest,parts,bytes,kind,title,search,color,thumbnail,width,height,copied,character_count)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
             params![digest, raw, bytes, kind, title, search, color, thumbnail.bytes,
-                thumbnail.width, thumbnail.height, copied],
+                thumbnail.width, thumbnail.height, copied, character_count],
         )?;
         let added = transaction.last_insert_rowid();
-        trim(&transaction, self.limit, Some(added))?;
+        trim(&transaction, Some(added))?;
         transaction.commit()?;
         Ok(())
     }
 
     pub fn catalog(&self, query: &str, kind: &str, collection: i64) -> Result<Catalog> {
         let mut select = self.disk.prepare(
-            "SELECT id,kind,title,copied,pinned,bytes,width,height,color,MAX(copied,COALESCE(pasted,copied))
+            "SELECT id,kind,title,copied,pinned,width,height,color,MAX(copied,COALESCE(pasted,copied)),character_count
              FROM clips c
              WHERE (?1='' OR instr(c.search,?1)>0) AND (?2='' OR c.kind=?2)
                AND (?3=0 OR EXISTS(SELECT 1 FROM memberships m WHERE m.clip=c.id AND m.collection=?3))",
@@ -244,14 +225,12 @@ impl History {
                 kind: row.get(1)?,
                 title: row.get(2)?,
                 copied: row.get(3)?,
-                last_used: row.get(9)?,
+                last_used: row.get(8)?,
                 pinned: row.get(4)?,
-                bytes: row.get(5)?,
-                width: row.get(6)?,
-                height: row.get(7)?,
-                color: row.get(8)?,
-                sensitive: false,
-                manually_sensitive: false,
+                character_count: row.get(9)?,
+                width: row.get(5)?,
+                height: row.get(6)?,
+                color: row.get(7)?,
                 collections: Vec::new(),
             })
         })?;
@@ -266,16 +245,6 @@ impl History {
         }
         for clip in &mut clips {
             clip.collections = memberships.remove(&clip.id).unwrap_or_default();
-        }
-        if query.is_empty() && (kind.is_empty() || kind == "sensitif") {
-            clips.extend(
-                self.session
-                    .values()
-                    .filter(|clip| {
-                        collection == 0 || clip.summary.collections.contains(&collection)
-                    })
-                    .map(|clip| clip.summary.clone()),
-            );
         }
         clips.sort_by(|a, b| {
             b.last_used
@@ -294,17 +263,10 @@ impl History {
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
-        Ok(Catalog {
-            clips,
-            collections,
-            usage: disk_usage(&self.disk)?,
-        })
+        Ok(Catalog { clips, collections })
     }
 
-    pub fn payload(&self, id: i64) -> Result<(Vec<Part>, bool)> {
-        if let Some(clip) = self.session.get(&id) {
-            return Ok((clip.parts.clone(), true));
-        }
+    pub fn payload(&self, id: i64) -> Result<Vec<Part>> {
         let raw: Vec<u8> = self
             .disk
             .query_row("SELECT parts FROM clips WHERE id=?1", [id], |row| {
@@ -313,7 +275,7 @@ impl History {
             .optional()?
             .ok_or(Error::Missing)?;
         let parts = bincode::deserialize(&raw).map_err(|_| Error::Storage)?;
-        Ok((parts, false))
+        Ok(parts)
     }
 
     pub fn thumbnail(&self, id: i64) -> Result<Vec<u8>> {
@@ -327,16 +289,12 @@ impl History {
     }
 
     pub fn pin(&mut self, id: i64, pinned: bool) -> Result<()> {
-        if let Some(clip) = self.session.get_mut(&id) {
-            clip.summary.pinned = pinned;
-            return Ok(());
-        }
         let transaction = self.disk.transaction()?;
         transaction.execute(
             "UPDATE clips SET pinned=?2 WHERE id=?1",
             params![id, pinned],
         )?;
-        trim(&transaction, self.limit, None)?;
+        trim(&transaction, None)?;
         transaction.commit()?;
         Ok(())
     }
@@ -390,33 +348,10 @@ impl History {
         {
             return Err(Error::CollectionMissing);
         }
-        // SQLite removes saved memberships. In-memory clips keep only surviving collections.
-        for clip in self.session.values_mut() {
-            clip.summary
-                .collections
-                .retain(|collection| *collection != id);
-        }
         Ok(())
     }
 
     pub fn membership(&mut self, id: i64, collection: i64, add: bool) -> Result<()> {
-        if let Some(clip) = self.session.get_mut(&id) {
-            let mut collections: BTreeSet<_> = clip.summary.collections.iter().copied().collect();
-            if add {
-                let valid: bool = self.disk.query_row(
-                    "SELECT EXISTS(SELECT 1 FROM collections WHERE id=?1)",
-                    [collection],
-                    |row| row.get(0),
-                )?;
-                if valid {
-                    collections.insert(collection);
-                }
-            } else {
-                collections.remove(&collection);
-            }
-            clip.summary.collections = collections.into_iter().collect();
-            return Ok(());
-        }
         let transaction = self.disk.transaction()?;
         if add {
             transaction.execute(
@@ -428,7 +363,7 @@ impl History {
                 "DELETE FROM memberships WHERE clip=?1 AND collection=?2",
                 [id, collection],
             )?;
-            trim(&transaction, self.limit, None)?;
+            trim(&transaction, None)?;
         }
         transaction.commit()?;
         Ok(())
@@ -456,19 +391,14 @@ impl History {
                 delete.execute([id])?;
             }
         }
-        if count == 0 && !ids.iter().any(|id| self.session.contains_key(id)) {
+        if count == 0 {
             return Ok(0); // Roll back the empty request and keep the previous undo.
         }
         transaction.commit()?;
-        self.deleted_session = ids
-            .iter()
-            .filter_map(|id| self.session.remove(id))
-            .collect();
-        Ok(count + self.deleted_session.len())
+        Ok(count)
     }
 
     pub fn discard_delete(&mut self) -> Result<()> {
-        self.deleted_session.clear();
         self.disk.execute_batch(
             "DROP TABLE IF EXISTS temp.deleted_memberships;
              DROP TABLE IF EXISTS temp.deleted_clips;",
@@ -477,31 +407,7 @@ impl History {
     }
 
     pub fn undo_delete(&mut self) -> Result<()> {
-        let new_session: Vec<_> = self
-            .deleted_session
-            .iter()
-            .filter(|deleted| {
-                !self
-                    .session
-                    .values()
-                    .any(|clip| clip.digest == deleted.digest)
-            })
-            .collect();
-        let session_bytes: usize = self
-            .session
-            .values()
-            .chain(new_session.iter().copied())
-            .map(|clip| clip.summary.bytes)
-            .sum();
-        if self.session.len() + new_session.len() > 50 || session_bytes > IMAGE_LIMIT {
-            return Err(Error::UndoFull);
-        }
-
         let transaction = self.disk.transaction()?;
-        // A clip recopied as sensitive during the undo window must stay off disk.
-        for clip in self.session.values() {
-            transaction.execute("DELETE FROM deleted_clips WHERE digest=?1", [&clip.digest])?;
-        }
         transaction.execute_batch(
             "INSERT OR IGNORE INTO clips SELECT * FROM deleted_clips;
              UPDATE clips SET pinned=1 WHERE digest IN (SELECT digest FROM deleted_clips WHERE pinned);
@@ -511,42 +417,11 @@ impl History {
                  JOIN clips c ON c.digest=d.digest
                  JOIN collections g ON g.id=m.collection;",
         )?;
-        if ordinary_count(&transaction)? > self.limit || disk_usage(&transaction)? > DISK_LIMIT {
+        if disk_usage(&transaction)? > DISK_LIMIT {
             return Err(Error::UndoFull);
         }
-        let collections = {
-            let mut select = transaction.prepare("SELECT id FROM collections")?;
-            select
-                .query_map([], |row| row.get(0))?
-                .collect::<rusqlite::Result<BTreeSet<i64>>>()?
-        };
         transaction.execute_batch("DROP TABLE deleted_memberships; DROP TABLE deleted_clips;")?;
         transaction.commit()?;
-        for mut deleted in self.deleted_session.drain(..) {
-            deleted
-                .summary
-                .collections
-                .retain(|id| collections.contains(id));
-            if let Some(current) = self
-                .session
-                .values_mut()
-                .find(|clip| clip.digest == deleted.digest)
-            {
-                current.summary.pinned |= deleted.summary.pinned;
-                if current.restore_color.is_none() && deleted.restore_color.is_some() {
-                    current.restore_color = deleted.restore_color;
-                    current.summary.manually_sensitive = true;
-                }
-                current
-                    .summary
-                    .collections
-                    .extend(deleted.summary.collections);
-                current.summary.collections.sort_unstable();
-                current.summary.collections.dedup();
-            } else {
-                self.session.insert(deleted.summary.id, deleted);
-            }
-        }
         Ok(())
     }
 
@@ -556,28 +431,17 @@ impl History {
             [],
             |row| row.get(0),
         )?;
-        let latest = latest_saved
-            .into_iter()
-            .chain(self.session.values().map(|clip| clip.summary.last_used))
-            .max()
-            .unwrap_or(0);
-        let pasted = now().max(latest.saturating_add(1));
-
-        if let Some(clip) = self.session.get_mut(&id) {
-            clip.summary.last_used = pasted;
-        } else {
-            self.disk.execute(
-                "UPDATE clips SET pasted=?2 WHERE id=?1",
-                params![id, pasted],
-            )?;
-        }
+        let pasted = now().max(latest_saved.unwrap_or(0).saturating_add(1));
+        self.disk.execute(
+            "UPDATE clips SET pasted=?2 WHERE id=?1",
+            params![id, pasted],
+        )?;
         Ok(())
     }
 
     pub fn clear(&mut self, all: bool) -> Result<()> {
         if all {
             self.disk.execute("DELETE FROM clips", [])?;
-            self.session.clear();
         } else {
             self.remove_unprotected(None)?;
         }
@@ -609,118 +473,8 @@ impl History {
              AND NOT EXISTS(SELECT 1 FROM memberships WHERE clip=clips.id)",
             [cutoff],
         )?;
-        let previous = self.session.len();
-        self.session.retain(|_, clip| {
-            let summary = &clip.summary;
-            summary.pinned
-                || !summary.collections.is_empty()
-                || cutoff.is_some_and(|time| summary.copied > time)
-        });
-        Ok(removed > 0 || self.session.len() < previous)
-    }
 
-    pub fn set_limit(&mut self, limit: usize) -> Result<()> {
-        let limit = limit.clamp(50, 2000);
-        let transaction = self.disk.transaction()?;
-        trim(&transaction, limit, None)?;
-        transaction.commit()?;
-        self.limit = limit;
-        Ok(())
-    }
-
-    pub fn mark_sensitive(&mut self, id: i64) -> Result<()> {
-        self.move_to_sensitive_session(id, true)
-    }
-
-    fn move_to_sensitive_session(&mut self, id: i64, manually_marked: bool) -> Result<()> {
-        if self.session.contains_key(&id) {
-            return Ok(());
-        }
-        let (parts, _) = self.payload(id)?;
-        let bytes = bytes_of(&parts);
-        self.ensure_session_space(bytes)?;
-        let (digest, copied, last_used, pinned, color) = self.disk.query_row(
-            "SELECT digest,copied,MAX(copied,COALESCE(pasted,copied)),pinned,color FROM clips WHERE id=?1",
-            [id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
-        )?;
-        let collections = {
-            let mut select = self
-                .disk
-                .prepare("SELECT collection FROM memberships WHERE clip=?1")?;
-            select
-                .query_map([id], |row| row.get(0))?
-                .collect::<rusqlite::Result<_>>()?
-        };
-        let transaction = self.disk.transaction()?;
-        transaction.execute("DELETE FROM clips WHERE id=?1", [id])?;
-        transaction.commit()?;
-        self.session.insert(
-            id,
-            SessionClip {
-                parts,
-                digest,
-                summary: sensitive_summary(
-                    id,
-                    copied,
-                    last_used,
-                    pinned,
-                    bytes,
-                    collections,
-                    manually_marked,
-                ),
-                restore_color: manually_marked.then_some(color),
-            },
-        );
-        Ok(())
-    }
-
-    pub fn unmark_sensitive(
-        &mut self,
-        id: i64,
-        thumbnail: impl FnOnce(&[Part]) -> Thumbnail,
-    ) -> Result<()> {
-        let clip = self.session.get(&id).ok_or(Error::Missing)?;
-        let color = clip
-            .restore_color
-            .clone()
-            .ok_or(Error::NotManuallySensitive)?;
-        let raw = bincode::serialize(&clip.parts).map_err(|_| Error::Storage)?;
-        let thumbnail = thumbnail(&clip.parts);
-        if clip.parts.iter().any(Part::image) && thumbnail.bytes.is_empty() {
-            return Err(Error::Storage);
-        }
-        let (kind, title, search, color) = clip::metadata(&clip.parts, color);
-        let summary = &clip.summary;
-        let pasted = (summary.last_used > summary.copied).then_some(summary.last_used);
-        let bytes = summary.bytes + thumbnail.bytes.len();
-
-        let transaction = self.disk.transaction()?;
-        transaction.execute(
-            "INSERT INTO clips (id,digest,parts,bytes,kind,title,search,color,thumbnail,width,height,copied,pasted,pinned)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
-            params![id, clip.digest, raw, bytes, kind, title, search, color, thumbnail.bytes,
-                thumbnail.width, thumbnail.height, summary.copied, pasted, summary.pinned],
-        )?;
-        {
-            let mut add_membership =
-                transaction.prepare("INSERT INTO memberships(clip,collection) VALUES(?1,?2)")?;
-            for collection in &summary.collections {
-                add_membership.execute(params![id, collection])?;
-            }
-        }
-        trim(&transaction, self.limit, Some(id))?;
-        transaction.commit()?;
-        self.session.remove(&id);
-        Ok(())
-    }
-
-    fn ensure_session_space(&self, bytes: usize) -> Result<()> {
-        let used: usize = self.session.values().map(|clip| clip.summary.bytes).sum();
-        if self.session.len() >= 50 || used.saturating_add(bytes) > IMAGE_LIMIT {
-            return Err(Error::Full);
-        }
-        Ok(())
+        Ok(removed > 0)
     }
 }
 
@@ -735,32 +489,6 @@ fn bytes_of(parts: &[Part]) -> usize {
     parts.iter().map(|part| part.data.len()).sum()
 }
 
-fn sensitive_summary(
-    id: i64,
-    copied: i64,
-    last_used: i64,
-    pinned: bool,
-    bytes: usize,
-    collections: Vec<i64>,
-    manually_sensitive: bool,
-) -> Summary {
-    Summary {
-        id,
-        copied,
-        last_used,
-        pinned,
-        sensitive: true,
-        manually_sensitive,
-        bytes,
-        collections,
-        kind: "sensitif".into(),
-        title: "Item sensitif".into(),
-        width: 0,
-        height: 0,
-        color: String::new(),
-    }
-}
-
 fn disk_usage(disk: &Connection) -> Result<usize> {
     Ok(
         disk.query_row("SELECT COALESCE(SUM(bytes),0) FROM clips", [], |row| {
@@ -769,19 +497,9 @@ fn disk_usage(disk: &Connection) -> Result<usize> {
     )
 }
 
-fn ordinary_count(disk: &Connection) -> Result<usize> {
-    Ok(disk.query_row(
-        "SELECT COUNT(*) FROM clips c WHERE NOT c.pinned AND
-         NOT EXISTS(SELECT 1 FROM memberships WHERE clip=c.id)",
-        [],
-        |row| row.get(0),
-    )?)
-}
-
-fn trim(transaction: &Transaction<'_>, limit: usize, added: Option<i64>) -> Result<()> {
-    let mut count = ordinary_count(transaction)?;
+fn trim(transaction: &Transaction<'_>, added: Option<i64>) -> Result<()> {
     let mut usage = disk_usage(transaction)?;
-    if count <= limit && usage <= DISK_LIMIT {
+    if usage <= DISK_LIMIT {
         return Ok(());
     }
 
@@ -799,9 +517,8 @@ fn trim(transaction: &Transaction<'_>, limit: usize, added: Option<i64>) -> Resu
     };
     for (id, bytes) in candidates {
         transaction.execute("DELETE FROM clips WHERE id=?1", [id])?;
-        count -= 1;
         usage -= bytes;
-        if count <= limit && usage <= DISK_LIMIT {
+        if usage <= DISK_LIMIT {
             return Ok(());
         }
     }
@@ -839,7 +556,6 @@ mod tests {
                     mime: "public.utf8-plain-text".into(),
                     data: text.as_bytes().to_vec(),
                 }],
-                true,
                 String::new(),
                 |_| Thumbnail::default(),
             )
@@ -849,132 +565,19 @@ mod tests {
     }
 
     #[test]
-    fn unmark_sensitive_restores_an_image_clip_with_its_metadata() {
-        let mut history = history();
-        let parts = vec![
-            Part {
-                item: 0,
-                mime: "public.png".into(),
-                data: vec![1, 2, 3],
-            },
-            Part {
-                item: 0,
-                mime: "public.utf8-plain-text".into(),
-                data: b"Gambar referensi".to_vec(),
-            },
-        ];
-        let make_thumbnail = |_: &[Part]| Thumbnail {
-            bytes: vec![4, 5],
-            width: 80,
-            height: 60,
-        };
-        history
-            .capture(parts.clone(), true, "#3355AA".into(), make_thumbnail)
-            .ok()
-            .unwrap();
-        let id = history.catalog("", "", 0).ok().unwrap().clips[0].id;
-        let collection = history.create_collection("Desain").ok().unwrap();
-        history.pin(id, true).ok().unwrap();
-        history.membership(id, collection, true).ok().unwrap();
-        history.mark_pasted(id).ok().unwrap();
-        let before = history
-            .catalog("referensi", "", collection)
-            .ok()
-            .unwrap()
-            .clips
-            .remove(0);
-
-        history.mark_sensitive(id).ok().unwrap();
-        let hidden = history
-            .catalog("", "", collection)
-            .ok()
-            .unwrap()
-            .clips
-            .remove(0);
-        assert!(hidden.sensitive && hidden.manually_sensitive);
-        assert!(
-            history
-                .catalog("referensi", "", 0)
-                .ok()
-                .unwrap()
-                .clips
-                .is_empty()
-        );
-        assert!(matches!(
-            history.unmark_sensitive(id, |_| Thumbnail::default()),
-            Err(Error::Storage)
-        ));
-        assert!(history.payload(id).ok().unwrap().1);
-
-        history.unmark_sensitive(id, make_thumbnail).ok().unwrap();
-        let restored = history
-            .catalog("referensi", "gambar", collection)
-            .ok()
-            .unwrap()
-            .clips
-            .remove(0);
-        assert_eq!(restored.id, id);
-        assert!(restored.pinned && !restored.sensitive && !restored.manually_sensitive);
-        assert_eq!(restored.collections, vec![collection]);
-        assert_eq!(restored.last_used, before.last_used);
-        assert_eq!(restored.copied, before.copied);
-        assert_eq!(restored.color, "#3355AA");
-        assert_eq!((restored.width, restored.height), (80, 60));
-        assert_eq!(history.thumbnail(id).ok().unwrap(), vec![4, 5]);
-        assert_eq!(history.payload(id).ok().unwrap(), (parts, false));
-        assert!(!history.session.contains_key(&id));
-    }
-
-    #[test]
-    fn automatically_detected_clip_cannot_be_unmarked() {
-        let mut history = history();
-        let parts = vec![Part {
-            item: 0,
-            mime: "public.utf8-plain-text".into(),
-            data: b"-----BEGIN PRIVATE KEY-----\nfixture\n-----END PRIVATE KEY-----".to_vec(),
-        }];
-        history
-            .capture(parts.clone(), false, String::new(), |_| {
-                Thumbnail::default()
-            })
-            .ok()
-            .unwrap();
-        let id = history.catalog("", "", 0).ok().unwrap().clips[0].id;
-
-        history
-            .capture(parts, true, String::new(), |_| Thumbnail::default())
-            .ok()
-            .unwrap();
-        let summary = history.catalog("", "", 0).ok().unwrap().clips.remove(0);
-        assert!(summary.sensitive && !summary.manually_sensitive);
-        assert!(matches!(
-            history.unmark_sensitive(id, |_| Thumbnail::default()),
-            Err(Error::NotManuallySensitive)
-        ));
-        assert_eq!(disk_usage(&history.disk).ok(), Some(0));
-    }
-
-    #[test]
     fn undo_batch_restores_payload_pin_and_membership() {
         let mut history = history();
         let ordinary = add(&mut history, "Brief desain");
-        add(
-            &mut history,
-            "-----BEGIN PRIVATE KEY-----\nfixture\n-----END PRIVATE KEY-----",
-        );
-        let sensitive = history.catalog("", "sensitif", 0).ok().unwrap().clips[0].id;
+        let second = add(&mut history, "Second clip");
         let collection = history.create_collection("Desain").ok().unwrap();
         history.pin(ordinary, true).ok().unwrap();
         history.membership(ordinary, collection, true).ok().unwrap();
-        history
-            .membership(sensitive, collection, true)
-            .ok()
-            .unwrap();
+        history.membership(second, collection, true).ok().unwrap();
         let before_ordinary = history.payload(ordinary).ok().unwrap();
-        let before_sensitive = history.payload(sensitive).ok().unwrap();
+        let before_second = history.payload(second).ok().unwrap();
 
-        assert_eq!(history.delete(&[ordinary, sensitive]).ok(), Some(2));
-        assert_eq!(history.delete(&[ordinary, sensitive]).ok(), Some(0));
+        assert_eq!(history.delete(&[ordinary, second]).ok(), Some(2));
+        assert_eq!(history.delete(&[ordinary, second]).ok(), Some(0));
         assert!(history.catalog("", "", 0).ok().unwrap().clips.is_empty());
 
         history.undo_delete().ok().unwrap();
@@ -985,18 +588,14 @@ mod tests {
                 .iter()
                 .any(|clip| clip.id == ordinary && clip.pinned)
         );
-        assert!(
-            restored
-                .iter()
-                .any(|clip| clip.id == sensitive && clip.sensitive)
+        assert!(restored.iter().any(|clip| clip.id == second));
+        assert_eq!(
+            history.payload(ordinary).ok().unwrap()[0].data,
+            before_ordinary[0].data
         );
         assert_eq!(
-            history.payload(ordinary).ok().unwrap().0[0].data,
-            before_ordinary.0[0].data
-        );
-        assert_eq!(
-            history.payload(sensitive).ok().unwrap().0[0].data,
-            before_sensitive.0[0].data
+            history.payload(second).ok().unwrap()[0].data,
+            before_second[0].data
         );
     }
 
@@ -1021,11 +620,17 @@ mod tests {
     #[test]
     fn protects_members_from_pruning_and_clears_only_ordinary_history() {
         let mut history = history();
-        history.limit = 1;
         let added = add(&mut history, "keep");
         let collection = history.create_collection("Pribadi").ok().unwrap();
         history.membership(added, collection, true).ok().unwrap();
-        add(&mut history, "old");
+        let old = add(&mut history, "old");
+        history
+            .disk
+            .execute(
+                "UPDATE clips SET bytes = ?1 WHERE id = ?2",
+                (DISK_LIMIT - 4, old),
+            )
+            .unwrap();
         add(&mut history, "new");
         assert!(history.catalog("old", "", 0).ok().unwrap().clips.is_empty());
         history.clear(false).ok().unwrap();
@@ -1067,7 +672,7 @@ mod tests {
     fn upgrading_history_preserves_clips_and_tracks_pastes_without_changing_copy_time() {
         let mut before = history();
         let older = add(&mut before, "older clip");
-        let newer = add(&mut before, "newer clip");
+        let newer = add(&mut before, " A👩‍💻\ne\u{301} ");
         let collection = before.create_collection("Work").ok().unwrap();
         before.membership(older, collection, true).ok().unwrap();
         before
@@ -1078,9 +683,14 @@ mod tests {
             .disk
             .execute("ALTER TABLE clips DROP COLUMN pasted", [])
             .unwrap();
+        before
+            .disk
+            .execute("ALTER TABLE clips DROP COLUMN character_count", [])
+            .unwrap();
 
         let mut history = History::new(before.disk).ok().unwrap();
         let clips = history.catalog("", "", 0).ok().unwrap().clips;
+        assert_eq!(clips[0].character_count, Some(6));
         assert_eq!(
             clips.iter().map(|clip| clip.id).collect::<Vec<_>>(),
             [newer, older]
@@ -1093,18 +703,16 @@ mod tests {
         assert_eq!(clips[0].collections, [collection]);
         assert_eq!(clips.len(), 2);
 
-        history.mark_sensitive(older).ok().unwrap();
         history.mark_pasted(newer).ok().unwrap();
         history.mark_pasted(older).ok().unwrap();
         let clips = history.catalog("", "", 0).ok().unwrap().clips;
         assert_eq!(clips[0].id, older);
-        assert!(clips[0].sensitive);
         assert_eq!(clips[0].copied, older);
         assert_eq!(clips[0].collections, [collection]);
     }
 
     #[test]
-    fn retention_expires_ordinary_disk_and_session_clips_only() {
+    fn retention_expires_ordinary_clips_only() {
         let mut history = history();
         let old = add(&mut history, "old ordinary");
         let recent = add(&mut history, "recent ordinary");
@@ -1121,20 +729,11 @@ mod tests {
             )
             .unwrap();
 
-        add(
-            &mut history,
-            "-----BEGIN PRIVATE KEY-----\nfixture\n-----END PRIVATE KEY-----",
-        );
-        let session = history.session.values_mut().next().unwrap();
-        let session_id = session.summary.id;
-        session.summary.copied = 1;
-
         let boundary = MILLIS_PER_DAY + 1;
         assert_eq!(history.expire_at(boundary).ok(), Some(false));
         history.set_retention_days(1);
         assert_eq!(history.expire_at(boundary).ok(), Some(true));
         assert!(matches!(history.payload(old), Err(Error::Missing)));
-        assert!(matches!(history.payload(session_id), Err(Error::Missing)));
         assert!(history.payload(recent).is_ok());
         assert!(history.payload(pinned).is_ok());
         assert!(history.payload(member).is_ok());
@@ -1147,13 +746,9 @@ mod tests {
         let primary = history.create_collection("Pribadi").ok().unwrap();
         let secondary = history.create_collection("Kerja").ok().unwrap();
         let saved = add(&mut history, "saved clip");
-        add(
-            &mut history,
-            "-----BEGIN PRIVATE KEY-----\nfixture\n-----END PRIVATE KEY-----",
-        );
-        let sensitive = history.catalog("", "sensitif", 0).ok().unwrap().clips[0].id;
-        assert!(saved > 0 && sensitive < 0);
-        for id in [saved, sensitive] {
+        let second = add(&mut history, "Second clip");
+        assert!(saved > 0 && second > 0);
+        for id in [saved, second] {
             history.membership(id, primary, true).ok().unwrap();
             history.membership(id, secondary, true).ok().unwrap();
         }
@@ -1254,28 +849,15 @@ mod tests {
     }
 
     #[test]
-    fn repeated_copy_reuses_data_and_manual_sensitivity_removes_database_record() {
+    fn repeated_copy_reuses_data() {
         let mut history = history();
         let id = add(&mut history, "example content");
         assert_eq!(add(&mut history, "example content"), id);
-        history.mark_sensitive(id).ok().unwrap();
-        assert_eq!(disk_usage(&history.disk).ok().unwrap(), 0);
-        assert!(
-            history
-                .catalog("example", "", 0)
-                .ok()
-                .unwrap()
-                .clips
-                .is_empty()
-        );
-        assert!(history.payload(id).ok().unwrap().1);
-        assert_eq!(add(&mut history, "example content"), id);
         assert_eq!(history.catalog("", "", 0).ok().unwrap().clips.len(), 1);
-        assert_eq!(disk_usage(&history.disk).ok().unwrap(), 0);
     }
 
     #[test]
-    fn marking_sensitive_removes_payload_from_the_closed_database_file() {
+    fn history_rejects_second_writer_and_preserves_saved_clip() {
         let directory = std::env::temp_dir().join(format!(
             "openclipboard-private-test-{}-{}",
             std::process::id(),
@@ -1292,12 +874,8 @@ mod tests {
                 History::open(&path).is_err(),
                 "a second writer acquired the lock"
             );
-            let id = add(&mut history, marker);
-            assert!(file_contains(&path, marker));
-            history.mark_sensitive(id).ok().unwrap();
-            assert!(history.payload(id).ok().unwrap().1);
+            add(&mut history, marker);
         }
-        assert!(!file_contains(&path, marker));
         assert!(!directory.join("history.sqlite3-journal").exists());
         let result = History::open(&path)
             .ok()
@@ -1305,27 +883,7 @@ mod tests {
             .catalog("", "", 0)
             .ok()
             .unwrap();
-        assert!(result.clips.is_empty());
+        assert_eq!(result.clips[0].title, marker);
         std::fs::remove_dir_all(directory).unwrap();
-    }
-
-    fn file_contains(path: &Path, text: &str) -> bool {
-        std::fs::read(path)
-            .unwrap()
-            .windows(text.len())
-            .any(|value| value == text.as_bytes())
-    }
-
-    #[test]
-    fn sensitive_content_stays_out_of_persistent_schema() {
-        let mut history = history();
-        let text = "-----BEGIN PRIVATE KEY-----\nfixture\n-----END PRIVATE KEY-----";
-        let id = add(&mut history, text);
-        assert!(id < 0);
-        assert_eq!(disk_usage(&history.disk).ok().unwrap(), 0);
-        assert_eq!(
-            history.catalog("", "", 0).ok().unwrap().clips[0].title,
-            "Item sensitif"
-        );
     }
 }

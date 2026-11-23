@@ -24,6 +24,7 @@ typedef NS_ENUM(NSUInteger, OCResultAction) {
 - (void)beginPreparedDrag:(NSArray<NSPasteboardItem *> *)items;
 - (BOOL)hasPointerGesture;
 - (NSRect)rowFrame:(NSInteger)index;
+- (void)scrollRowToVisible:(NSInteger)index;
 - (void)layoutRows;
 - (void)invalidateClip:(NSNumber *)identifier;
 - (void)extendSelectionTo:(NSInteger)index;

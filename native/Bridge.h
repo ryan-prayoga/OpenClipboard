@@ -26,12 +26,13 @@ void oc_shortcut_fired(uint32_t identifier);
 bool oc_start_worker(const char *path);
 bool oc_send(const char *request);
 typedef enum : uint8_t { OCCaptureRejected, OCCaptureAccepted, OCCaptureBusy } OCCaptureResult;
-OCCaptureResult oc_capture(const OCPart *parts, size_t count, bool detect_sensitive, const char *color);
+OCCaptureResult oc_capture(const OCPart *parts, size_t count, const char *color);
 void oc_event(const char *event);
-void oc_payload(uint64_t ticket, int64_t id, bool sensitive, const OCPart *parts, size_t count);
+void oc_payload(uint64_t ticket, int64_t id, const OCPart *parts, size_t count);
 void oc_preview_image(uint64_t ticket, int64_t id, const uint8_t *data, size_t length);
 OCThumbnail oc_thumbnail(const uint8_t *data, size_t length);
 void oc_free_thumbnail(uint8_t *data);
+size_t oc_character_count(const uint8_t *data, size_t length);
 
 // Collection tabs: index 0 is the history tab, 1... are collections (count includes history).
 int64_t oc_tab_step(int64_t current, int64_t count, int64_t delta);

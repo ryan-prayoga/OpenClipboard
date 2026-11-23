@@ -28,14 +28,14 @@ struct NativeThumbnail {
 
 unsafe extern "C" {
     fn oc_event(message: *const c_char);
-    fn oc_payload(ticket: u64, id: i64, sensitive: bool, parts: *const NativePart, count: usize);
+    fn oc_payload(ticket: u64, id: i64, parts: *const NativePart, count: usize);
     fn oc_preview_image(ticket: u64, id: i64, data: *const u8, length: usize);
     fn oc_thumbnail(data: *const u8, length: usize) -> NativeThumbnail;
     fn oc_free_thumbnail(data: *mut u8);
 }
 
 enum Work {
-    Capture(Vec<Part>, bool, String),
+    Capture(Vec<Part>, String),
     Request(Request),
 }
 
@@ -91,17 +91,8 @@ enum Request {
     Clear {
         all: bool,
     },
-    Limit {
-        limit: usize,
-    },
     Retention {
         days: u16,
-    },
-    MarkSensitive {
-        id: i64,
-    },
-    UnmarkSensitive {
-        id: i64,
     },
 }
 
@@ -146,7 +137,6 @@ enum CaptureResult {
 unsafe extern "C" fn oc_capture(
     parts: *const NativePart,
     count: usize,
-    detect_sensitive: bool,
     color: *const c_char,
 ) -> CaptureResult {
     if parts.is_null() || count == 0 || count > 1024 {
@@ -191,7 +181,7 @@ unsafe extern "C" fn oc_capture(
     let Some(worker) = WORKER.get() else {
         return CaptureResult::Rejected;
     };
-    match worker.try_send(Work::Capture(parts, detect_sensitive, color)) {
+    match worker.try_send(Work::Capture(parts, color)) {
         Ok(()) => CaptureResult::Accepted,
         Err(mpsc::TrySendError::Full(_)) => CaptureResult::Busy,
         Err(mpsc::TrySendError::Disconnected(_)) => CaptureResult::Rejected,
@@ -253,8 +243,8 @@ fn run(path: PathBuf, receiver: mpsc::Receiver<Work>) {
             }
         };
         let result = match work {
-            Work::Capture(parts, detect, color) => history
-                .capture(parts, detect, color, create_thumbnail)
+            Work::Capture(parts, color) => history
+                .capture(parts, color, create_thumbnail)
                 .map(|_| emit(json!({"kind":"changed"}))),
             Work::Request(Request::DeleteMany { ids }) => history.delete(&ids).map(|count| {
                 if count > 0 {
@@ -316,7 +306,6 @@ fn error_reason(error: Error) -> &'static str {
         Error::Storage => "storage",
         Error::UndoUnavailable => "undo_unavailable",
         Error::UndoFull => "undo_full",
-        Error::NotManuallySensitive => "not_manually_sensitive",
     }
 }
 
@@ -341,7 +330,7 @@ fn handle_request(history: &mut History, request: Request) -> Result<(), Error> 
         }
         Request::Payload { ticket, id } => {
             history.expire()?;
-            let (parts, sensitive) = history.payload(id)?;
+            let parts = history.payload(id)?;
             let types: Vec<_> = parts
                 .iter()
                 .map(|part| CString::new(part.mime.as_str()))
@@ -357,7 +346,7 @@ fn handle_request(history: &mut History, request: Request) -> Result<(), Error> 
                     length: part.data.len(),
                 })
                 .collect();
-            unsafe { oc_payload(ticket, id, sensitive, native.as_ptr(), native.len()) };
+            unsafe { oc_payload(ticket, id, native.as_ptr(), native.len()) };
             return Ok(());
         }
         Request::Thumbnail { ticket, id } => {
@@ -383,16 +372,10 @@ fn handle_request(history: &mut History, request: Request) -> Result<(), Error> 
         Request::DeleteMany { .. } | Request::UndoDelete { .. } | Request::Clear { .. } => {
             unreachable!("handled with the undo state")
         }
-        Request::Limit { limit } => {
-            history.set_limit(limit)?;
-            emit(json!({"kind":"limit", "value":limit.clamp(50, 2000)}));
-        }
         Request::Retention { days } => {
             history.set_retention_days(days);
             history.expire()?;
         }
-        Request::MarkSensitive { id } => history.mark_sensitive(id)?,
-        Request::UnmarkSensitive { id } => history.unmark_sensitive(id, create_thumbnail)?,
     }
     emit(json!({"kind":"changed"}));
     Ok(())

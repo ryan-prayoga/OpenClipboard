@@ -1,3 +1,4 @@
+#import "Native.h"
 #import "Results.h"
 
 static CGFloat const CardWidth = 224;
@@ -11,14 +12,19 @@ static CGFloat const ImageRowHeight = 83;
 static CGFloat const RowInset = 5;
 
 static NSString *KindLabel(NSString *kind) {
-    return @{@"teks":@"Teks", @"url":@"Tautan", @"json":@"JSON", @"kode":@"Kode",
-        @"warna":@"Warna", @"gambar":@"Gambar", @"sensitif":@"Sensitif"}[kind] ?: @"Teks";
+    return @{@"teks":OCText(@"Teks", @"Text"), @"url":OCText(@"Tautan", @"Link"), @"json":@"JSON", @"kode":OCText(@"Kode", @"Code"),
+        @"warna":OCText(@"Warna", @"Color"), @"gambar":OCText(@"Gambar", @"Image")}[kind] ?: OCText(@"Teks", @"Text");
+}
+
+static NSString *EntryCharacterCount(NSDictionary *entry) {
+    NSNumber *count = entry[@"character_count"];
+    return [count isKindOfClass:NSNumber.class] ? OCCharacterCountLabel(count.unsignedIntegerValue) : nil;
 }
 
 static NSString *KindIcon(NSString *kind) {
     return @{@"teks":@"text.alignleft", @"url":@"link", @"json":@"curlybraces",
         @"kode":@"chevron.left.forwardslash.chevron.right", @"warna":@"paintpalette",
-        @"gambar":@"photo", @"sensitif":@"eye.slash"}[kind] ?: @"text.alignleft";
+        @"gambar":@"photo"}[kind] ?: @"text.alignleft";
 }
 
 static NSURL *DragImageDirectory(void) {
@@ -76,8 +82,7 @@ static NSColor *Secondary(void) {
 static NSColor *KindColor(NSString *kind) {
     return @{@"teks":NSColor.systemBlueColor, @"url":NSColor.systemTealColor,
         @"gambar":NSColor.systemPurpleColor, @"json":NSColor.systemOrangeColor,
-        @"kode":NSColor.systemIndigoColor, @"warna":NSColor.systemPinkColor,
-        @"sensitif":NSColor.systemGrayColor}[kind] ?: NSColor.systemBlueColor;
+        @"kode":NSColor.systemIndigoColor, @"warna":NSColor.systemPinkColor}[kind] ?: NSColor.systemBlueColor;
 }
 
 static NSBezierPath *Rounded(NSRect rect, CGFloat radius) {
@@ -122,7 +127,7 @@ static NSString *ActivityTime(NSNumber *timestamp) {
         return [NSDateFormatter localizedStringFromDate:date dateStyle:NSDateFormatterNoStyle
                                               timeStyle:NSDateFormatterShortStyle];
     }
-    if ([calendar isDateInYesterday:date]) return @"Kemarin";
+    if ([calendar isDateInYesterday:date]) return OCText(@"Kemarin", @"Yesterday");
     if ([calendar component:NSCalendarUnitYear fromDate:date] != [calendar component:NSCalendarUnitYear fromDate:NSDate.date]) {
         return [NSDateFormatter localizedStringFromDate:date dateStyle:NSDateFormatterShortStyle
                                               timeStyle:NSDateFormatterNoStyle];
@@ -213,7 +218,7 @@ static NSColor *Swatch(NSString *hex) {
         [self addSubview:_emptyDetail];
         [self setAccessibilityElement:YES];
         [self setAccessibilityRole:NSAccessibilityGroupRole];
-        [self setAccessibilityLabel:@"Hasil clipboard"];
+        [self setAccessibilityLabel:OCText(@"Hasil clipboard", @"Clipboard results")];
     }
     return self;
 }
@@ -266,6 +271,29 @@ static NSColor *Swatch(NSString *hex) {
     self.emptyTitle.hidden = self.rows.count || !self.emptyTitle.stringValue.length;
     self.emptyDetail.hidden = self.rows.count || !self.emptyDetail.stringValue.length;
     self.needsDisplay = YES;
+}
+
+- (void)scrollRowToVisible:(NSInteger)index {
+    NSRect row = [self rowFrame:index];
+    NSScrollView *scroll = self.enclosingScrollView;
+    if (NSIsEmptyRect(row) || !scroll) return;
+
+    NSClipView *clip = scroll.contentView;
+    NSRect visible = [self convertRect:clip.bounds fromView:clip];
+    NSRect target = visible;
+    if (self.horizontal) {
+        if (NSMinX(row) < NSMinX(visible)) target.origin.x = NSMinX(row);
+        else if (NSMaxX(row) > NSMaxX(visible)) target.origin.x = NSMaxX(row) - NSWidth(visible);
+    } else {
+        if (NSMinY(row) < NSMinY(visible)) target.origin.y = NSMinY(row);
+        else if (NSMaxY(row) > NSMaxY(visible)) target.origin.y = NSMaxY(row) - NSHeight(visible);
+    }
+    if (!NSEqualPoints(target.origin,visible.origin)) {
+        NSRect constrained = [clip constrainBoundsRect:[clip convertRect:target fromView:self]];
+        [clip scrollToPoint:constrained.origin];
+        [scroll reflectScrolledClipView:clip];
+    }
+    [self setNeedsDisplayInRect:row];
 }
 
 - (void)showEmptyTitle:(NSString *)title detail:(NSString *)detail announce:(BOOL)announce {
@@ -429,13 +457,12 @@ static NSColor *Swatch(NSString *hex) {
 
 - (void)drawEntry:(NSDictionary *)entry rect:(NSRect)rect selected:(BOOL)selected lead:(BOOL)lead {
     NSString *kind = entry[@"kind"] ?: @"teks";
-    NSString *title = [entry[@"title"] length] ? entry[@"title"] : @"(Teks kosong)";
+    NSString *title = [entry[@"title"] length] ? entry[@"title"] : OCText(@"(Teks kosong)", @"(Empty text)");
     NSImage *thumbnail = self.images[entry[@"id"]];
     NSColor *tint = KindColor(kind);
     NSColor *swatch = Swatch(entry[@"color"]);
     NSColor *accent = NSColor.controlAccentColor;
     BOOL dark = DarkAppearance();
-    BOOL sensitive = [entry[@"sensitive"] boolValue];
     BOOL pinned = [entry[@"pinned"] boolValue];
     BOOL imageKind = [kind isEqualToString:@"gambar"];
     NSString *host = [kind isEqualToString:@"url"] ? [NSURL URLWithString:title].host : nil;
@@ -463,7 +490,7 @@ static NSColor *Swatch(NSString *hex) {
 
     if (self.horizontal) {
         [self drawCard:rect entry:entry kind:kind title:title host:host tint:tint swatch:swatch thumbnail:thumbnail
-              imageSize:imageSize sensitive:sensitive pinned:pinned];
+              imageSize:imageSize pinned:pinned];
         return;
     }
 
@@ -487,29 +514,29 @@ static NSColor *Swatch(NSString *hex) {
     }
 
     CGFloat textLeft = NSMaxX(tile)+11, textWidth = MAX(0,right-textLeft-56);
-    DrawText(imageKind ? @"Gambar" : title,NSMakeRect(textLeft,center-16,textWidth,18),13,
+    DrawText(imageKind ? OCText(@"Gambar", @"Image") : title,NSMakeRect(textLeft,center-16,textWidth,18),13,
              NSFontWeightSemibold,NSColor.labelColor);
-    NSString *detail = imageSize ?: (host.length ? host : sensitive ? @"Spasi untuk membuka" : KindLabel(kind));
+    NSString *detail = imageSize ?: (host.length ? host : KindLabel(kind));
+    NSString *count = EntryCharacterCount(entry);
+    if (count) detail = [NSString stringWithFormat:@"%@ · %@",count,detail];
     DrawText(detail,NSMakeRect(textLeft,center+2,textWidth,16),11.5,
              NSFontWeightMedium,Secondary());
     CGFloat timeTop = pinned ? center-15 : center-7;
     NSRect timeRect = NSMakeRect(right-56,timeTop,56,16);
     if (pinned) {
-        CGFloat pinTop = sensitive ? center-5.5 : NSMaxY(timeRect)+3;
+        CGFloat pinTop = NSMaxY(timeRect)+3;
         DrawImage(Symbol(@"pin"),NSMakeRect(right-11,pinTop,11,11));
     }
-    if (!sensitive) {
-        NSMutableParagraphStyle *align = [NSMutableParagraphStyle new];
-        align.alignment = NSTextAlignmentRight;
-        [ActivityTime(entry[@"last_used"]) drawInRect:timeRect
-            withAttributes:@{NSFontAttributeName:[NSFont monospacedDigitSystemFontOfSize:11 weight:NSFontWeightMedium],
-                NSForegroundColorAttributeName:Secondary(), NSParagraphStyleAttributeName:align}];
-    }
+    NSMutableParagraphStyle *align = [NSMutableParagraphStyle new];
+    align.alignment = NSTextAlignmentRight;
+    [ActivityTime(entry[@"last_used"]) drawInRect:timeRect
+        withAttributes:@{NSFontAttributeName:[NSFont monospacedDigitSystemFontOfSize:11 weight:NSFontWeightMedium],
+            NSForegroundColorAttributeName:Secondary(), NSParagraphStyleAttributeName:align}];
 }
 
 - (void)drawCard:(NSRect)rect entry:(NSDictionary *)entry kind:(NSString *)kind title:(NSString *)title
             host:(NSString *)host tint:(NSColor *)tint swatch:(NSColor *)swatch thumbnail:(NSImage *)thumbnail
-       imageSize:(NSString *)imageSize sensitive:(BOOL)sensitive pinned:(BOOL)pinned {
+       imageSize:(NSString *)imageSize pinned:(BOOL)pinned {
     CGFloat left = NSMinX(rect)+CardInset, top = NSMinY(rect), right = NSMaxX(rect)-CardInset;
     NSRect tile = NSMakeRect(left,top+11,26,26);
     [[tint colorWithAlphaComponent:0.17] setFill];
@@ -529,12 +556,6 @@ static NSColor *Swatch(NSString *hex) {
     if (imageSize) {
         if (thumbnail) DrawImage(thumbnail, body);
         else DrawImage(Symbol(@"photo"),NSInsetRect(body,(NSWidth(body)-28)/2,(NSHeight(body)-28)/2));
-    } else if (sensitive) {
-        DrawImage(Symbol(@"eye.slash"),NSMakeRect(left+11,NSMinY(body)+11,19,19));
-        DrawText(@"Item sensitif",NSMakeRect(left+11,NSMinY(body)+42,NSWidth(body)-22,22),15,
-                 NSFontWeightSemibold,NSColor.labelColor);
-        DrawText(@"••••••••••••",NSMakeRect(left+11,NSMinY(body)+70,NSWidth(body)-22,26),20,
-                 NSFontWeightMedium,NSColor.tertiaryLabelColor);
     } else if (swatch && [kind isEqualToString:@"warna"]) {
         NSGradient *shade = [[NSGradient alloc] initWithStartingColor:[swatch highlightWithLevel:0.16]
             endingColor:[swatch shadowWithLevel:0.13]];
@@ -563,18 +584,16 @@ static NSColor *Swatch(NSString *hex) {
     }
     [NSGraphicsContext restoreGraphicsState];
 
-    NSString *caption = sensitive ? @"Spasi untuk membuka" : imageSize;
+    NSString *caption = imageSize ?: EntryCharacterCount(entry);
     if (caption.length) {
         DrawText(caption,NSMakeRect(left,top+184,right-left-47,15),11.5,
                  NSFontWeightMedium,Secondary());
     }
-    if (!sensitive) {
-        NSMutableParagraphStyle *align = [NSMutableParagraphStyle new];
-        align.alignment = NSTextAlignmentRight;
-        [ActivityTime(entry[@"last_used"]) drawInRect:NSMakeRect(right-56,top+184,56,15)
-            withAttributes:@{NSFontAttributeName:[NSFont monospacedDigitSystemFontOfSize:11.5 weight:NSFontWeightMedium],
-                NSForegroundColorAttributeName:Secondary(), NSParagraphStyleAttributeName:align}];
-    }
+    NSMutableParagraphStyle *align = [NSMutableParagraphStyle new];
+    align.alignment = NSTextAlignmentRight;
+    [ActivityTime(entry[@"last_used"]) drawInRect:NSMakeRect(right-56,top+184,56,15)
+        withAttributes:@{NSFontAttributeName:[NSFont monospacedDigitSystemFontOfSize:11.5 weight:NSFontWeightMedium],
+            NSForegroundColorAttributeName:Secondary(), NSParagraphStyleAttributeName:align}];
 }
 
 - (NSInteger)indexAt:(NSPoint)point {
@@ -723,14 +742,13 @@ static NSColor *Swatch(NSString *hex) {
         NSRect rect = [self rowFrame:(NSInteger)index];
         if (!NSIntersectsRect(rect, visible)) continue;
         NSDictionary *entry = self.rows[index];
-        BOOL sensitive = [entry[@"sensitive"] boolValue];
-        NSString *title = sensitive ? @"Item sensitif" : entry[@"title"];
-        NSString *label = title.length ? title : @"Teks kosong";
-        if (!sensitive) {
-            // Kind, pin state, and time are shown visually, so VoiceOver gets them too.
-            label = [NSString stringWithFormat:@"%@, %@%@, %@", label, KindLabel(entry[@"kind"]),
-                [entry[@"pinned"] boolValue] ? @", disematkan" : @"", ActivityTime(entry[@"last_used"])];
-        }
+        NSString *title = entry[@"title"];
+        NSString *label = title.length ? title : OCText(@"Teks kosong", @"Empty text");
+        // Kind, pin state, and time are shown visually, so VoiceOver gets them too.
+        label = [NSString stringWithFormat:@"%@, %@%@, %@", label, KindLabel(entry[@"kind"]),
+            [entry[@"pinned"] boolValue] ? OCText(@", disematkan", @", pinned") : @"", ActivityTime(entry[@"last_used"])];
+        NSString *count = EntryCharacterCount(entry);
+        if (count) label = [label stringByAppendingFormat:@", %@",count];
         NSRect screen = [self.window convertRectToScreen:[self convertRect:rect toView:nil]];
         OCRowAccessibility *item = [OCRowAccessibility accessibilityElementWithRole:NSAccessibilityButtonRole
                 frame:screen label:label parent:self];

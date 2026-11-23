@@ -6,15 +6,27 @@
 #import <ServiceManagement/ServiceManagement.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
-static NSString *const ShortcutHelp = @"Buka riwayat dari aplikasi yang sedang dipakai.";
+static NSString *ShortcutHelp(void) { return OCText(@"Buka riwayat dari aplikasi yang sedang dipakai.", @"Open history from any app."); }
 static NSString *const ShortcutKey = @"OCShortcutKey";
 static NSString *const ShortcutFlags = @"OCShortcutFlags";
 static NSString *const ShortcutLabel = @"OCShortcutLabel";
 static NSString *const BottomMode = @"OCBottomMode";
 NSString *const OCLiquidGlassPreference = @"OCLiquidGlass";
-static NSString *const HistoryLimit = @"OCHistoryLimit";
 static NSString *const HistoryRetentionDays = @"OCHistoryRetentionDays";
-static NSString *const HistoryStorageNote = @"Riwayat clipboard disimpan di Mac ini.";
+static NSString *CurrentShortcutLabel(void) {
+    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+    NSString *label = [defaults stringForKey:ShortcutLabel] ?: @"⌘⇧V";
+    if ([defaults integerForKey:ShortcutKey] != 49) return label;
+    for (NSString *space in @[@"Spasi", @"Space"]) {
+        if ([label hasSuffix:space]) {
+            NSString *modifiers = [label substringToIndex:label.length - space.length];
+            return [modifiers stringByAppendingString:OCText(@"Spasi", @"Space")];
+        }
+    }
+    return label;
+}
+
+static NSString *HistoryStorageNote(void) { return OCText(@"Riwayat clipboard disimpan di Mac ini.", @"Clipboard history is stored on this Mac."); }
 
 BOOL OCSend(NSDictionary *command) {
     NSData *json = [NSJSONSerialization dataWithJSONObject:command options:0 error:nil];
@@ -27,13 +39,13 @@ void OCConfirmClearHistory(NSWindow *window, BOOL all, dispatch_block_t confirm)
     if (!window || window.attachedSheet) return;
     NSAlert *alert = [NSAlert new];
     alert.alertStyle = NSAlertStyleWarning;
-    alert.messageText = all ? @"Hapus semua klip?" : @"Bersihkan riwayat?";
+    alert.messageText = all ? OCText(@"Hapus semua klip?", @"Delete all clips?") : OCText(@"Bersihkan riwayat?", @"Clear history?");
     alert.informativeText = all
-        ? @"Semua klip akan dihapus, termasuk klip sematan dan klip di koleksi."
-        : @"Klip sematan dan klip di koleksi akan tetap tersimpan.";
-    NSButton *cancel = [alert addButtonWithTitle:@"Batal"];
+        ? OCText(@"Semua klip akan dihapus, termasuk klip sematan dan klip di koleksi.", @"This deletes all clips, including pinned clips and clips in collections.")
+        : OCText(@"Klip sematan dan klip di koleksi akan tetap tersimpan.", @"Pinned clips and clips in collections are kept.");
+    NSButton *cancel = [alert addButtonWithTitle:OCText(@"Batal", @"Cancel")];
     cancel.keyEquivalent = @"\e";
-    [alert addButtonWithTitle:all ? @"Hapus semua klip" : @"Bersihkan riwayat"].hasDestructiveAction = YES;
+    [alert addButtonWithTitle:all ? OCText(@"Hapus semua klip", @"Delete All Clips") : OCText(@"Bersihkan riwayat", @"Clear History")].hasDestructiveAction = YES;
     [alert beginSheetModalForWindow:window completionHandler:^(NSModalResponse response) {
         if (response == NSAlertSecondButtonReturn) confirm();
     }];
@@ -55,14 +67,11 @@ void OCConfirmClearHistory(NSWindow *window, BOOL all, dispatch_block_t confirm)
 @property(nonatomic, strong) NSTextField *historyStatus;
 @property(nonatomic, strong) NSTextField *historyFeedback;
 @property(nonatomic, strong) NSButton *retryButton;
-@property(nonatomic, strong) NSTextField *historyLimit;
 @property(nonatomic, strong) NSView *historyRetentionContainer;
 @property(nonatomic, strong) NSPopUpButton *historyRetention;
-@property(nonatomic, strong) NSTextField *usage;
 @property(nonatomic, strong) NSTextField *clipboardPermission;
 @property(nonatomic, strong) NSTextField *caretPermission;
 @property(nonatomic, strong) NSButton *guideButton;
-@property(nonatomic, strong) NSButton *detection;
 @property(nonatomic, strong) NSTableView *excludedTable;
 @property(nonatomic, copy) NSArray<NSDictionary *> *excludedRows;
 @property(nonatomic, strong) NSTextField *excludedEmpty;
@@ -70,9 +79,6 @@ void OCConfirmClearHistory(NSWindow *window, BOOL all, dispatch_block_t confirm)
 @property(nonatomic, strong) id captureMonitor;
 @property(nonatomic) int64_t shortcutID;
 @property(nonatomic) BOOL launchedAtLogin;
-@property(nonatomic, strong) NSTextField *onboardShortcut;
-@property(nonatomic, strong) NSTextField *onboardAccessibility;
-@property(nonatomic, strong) NSButton *onboardGuideButton;
 - (void)receiveEvent:(NSDictionary *)event;
 - (void)showSettings;
 @end
@@ -227,7 +233,7 @@ static void SettingsTitle(NSView *pane, NSString *title) {
     NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
     [defaults registerDefaults:@{
         ShortcutKey: @9, ShortcutFlags: @12, ShortcutLabel: @"⌘⇧V",
-        BottomMode: @NO, OCLiquidGlassPreference: @YES, @"OCDetectSensitive": @YES, HistoryLimit: @500, HistoryRetentionDays: @0,
+        BottomMode: @NO, OCLiquidGlassPreference: @YES, HistoryRetentionDays: @0,
     }];
 
     NSString *testDirectory = [defaults stringForKey:@"OCTestDataDirectory"];
@@ -237,7 +243,6 @@ static void SettingsTitle(NSView *pane, NSString *title) {
         : [support.path stringByAppendingPathComponent:@"OpenClipboard"];
     oc_start_worker([directory stringByAppendingPathComponent:@"history.sqlite3"].fileSystemRepresentation);
     OCSend(@{@"action": @"retention", @"days": @([defaults integerForKey:HistoryRetentionDays])});
-    OCSend(@{@"action": @"limit", @"limit": @([defaults integerForKey:HistoryLimit])});
 
     [self installMainMenu];
     self.picker = [OCPicker new];
@@ -245,7 +250,6 @@ static void SettingsTitle(NSView *pane, NSString *title) {
     __weak OCApplication *weakSelf = self;
     self.picker.openSettings = ^{ [weakSelf showSettings]; };
     self.picker.quit = ^{ [weakSelf confirmQuit:nil]; };
-    self.picker.openAccessibilityGuide = ^{ [weakSelf requestCaret:nil]; };
     self.picker.prepareClipboardWrite = ^BOOL { return [weakSelf.recorder prepareClipboardWrite]; };
     self.recorder.statusChanged = ^{ [weakSelf refreshRecording]; };
     [self.recorder startTimer];
@@ -272,29 +276,29 @@ static void SettingsTitle(NSView *pane, NSString *title) {
     NSMenu *bar = [NSMenu new];
     NSMenuItem *appItem = [NSMenuItem new];
     NSMenu *app = [[NSMenu alloc] initWithTitle:@"OpenClipboard"];
-    NSMenuItem *settings = [app addItemWithTitle:@"Pengaturan…" action:@selector(openSettingsFromMenu:) keyEquivalent:@","];
+    NSMenuItem *settings = [app addItemWithTitle:OCText(@"Pengaturan…", @"Settings…") action:@selector(openSettingsFromMenu:) keyEquivalent:@","];
     settings.target = self;
     [app addItem:NSMenuItem.separatorItem];
-    [app addItemWithTitle:@"Keluar dari OpenClipboard" action:@selector(terminate:) keyEquivalent:@"q"];
+    [app addItemWithTitle:OCText(@"Keluar dari OpenClipboard", @"Quit OpenClipboard") action:@selector(terminate:) keyEquivalent:@"q"];
     appItem.submenu = app;
     [bar addItem:appItem];
 
     NSMenuItem *editItem = [NSMenuItem new];
     NSMenu *edit = [[NSMenu alloc] initWithTitle:@"Edit"];
-    [edit addItemWithTitle:@"Urungkan" action:NSSelectorFromString(@"undo:") keyEquivalent:@"z"];
-    NSMenuItem *redo = [edit addItemWithTitle:@"Ulangi" action:NSSelectorFromString(@"redo:") keyEquivalent:@"z"];
+    [edit addItemWithTitle:OCText(@"Urungkan", @"Undo") action:NSSelectorFromString(@"undo:") keyEquivalent:@"z"];
+    NSMenuItem *redo = [edit addItemWithTitle:OCText(@"Ulangi", @"Redo") action:NSSelectorFromString(@"redo:") keyEquivalent:@"z"];
     redo.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagShift;
     [edit addItem:NSMenuItem.separatorItem];
-    [edit addItemWithTitle:@"Potong" action:@selector(cut:) keyEquivalent:@"x"];
-    [edit addItemWithTitle:@"Salin" action:@selector(copy:) keyEquivalent:@"c"];
-    [edit addItemWithTitle:@"Tempel" action:@selector(paste:) keyEquivalent:@"v"];
-    [edit addItemWithTitle:@"Pilih Semua" action:@selector(selectAll:) keyEquivalent:@"a"];
+    [edit addItemWithTitle:OCText(@"Potong", @"Cut") action:@selector(cut:) keyEquivalent:@"x"];
+    [edit addItemWithTitle:OCText(@"Salin", @"Copy") action:@selector(copy:) keyEquivalent:@"c"];
+    [edit addItemWithTitle:OCText(@"Tempel", @"Paste") action:@selector(paste:) keyEquivalent:@"v"];
+    [edit addItemWithTitle:OCText(@"Pilih Semua", @"Select All") action:@selector(selectAll:) keyEquivalent:@"a"];
     editItem.submenu = edit;
     [bar addItem:editItem];
 
     NSMenuItem *windowItem = [NSMenuItem new];
-    NSMenu *window = [[NSMenu alloc] initWithTitle:@"Jendela"];
-    [window addItemWithTitle:@"Tutup" action:@selector(performClose:) keyEquivalent:@"w"];
+    NSMenu *window = [[NSMenu alloc] initWithTitle:OCText(@"Jendela", @"Window")];
+    [window addItemWithTitle:OCText(@"Tutup", @"Close") action:@selector(performClose:) keyEquivalent:@"w"];
     windowItem.submenu = window;
     [bar addItem:windowItem];
     NSApp.mainMenu = bar;
@@ -307,11 +311,11 @@ static void SettingsTitle(NSView *pane, NSString *title) {
 - (void)confirmQuit:(id)sender {
     NSAlert *alert = [NSAlert new];
     alert.alertStyle = NSAlertStyleWarning;
-    alert.messageText = @"Keluar dari OpenClipboard?";
-    alert.informativeText = @"Perekaman clipboard dan shortcut berhenti sampai aplikasi dibuka lagi dari Finder atau Spotlight.";
-    NSButton *cancel = [alert addButtonWithTitle:@"Batal"];
+    alert.messageText = OCText(@"Keluar dari OpenClipboard?", @"Quit OpenClipboard?");
+    alert.informativeText = OCText(@"Perekaman clipboard dan shortcut berhenti sampai aplikasi dibuka lagi dari Finder atau Spotlight.", @"Clipboard recording and the shortcut stop until you reopen the app from Finder or Spotlight.");
+    NSButton *cancel = [alert addButtonWithTitle:OCText(@"Batal", @"Cancel")];
     cancel.keyEquivalent = @"\e";
-    [alert addButtonWithTitle:@"Keluar"].hasDestructiveAction = YES;
+    [alert addButtonWithTitle:OCText(@"Keluar", @"Quit")].hasDestructiveAction = YES;
     if ([alert runModal] == NSAlertSecondButtonReturn) [NSApp terminate:nil];
 }
 
@@ -323,14 +327,14 @@ static void SettingsTitle(NSView *pane, NSString *title) {
 - (void)applicationDidResignActive:(NSNotification *)notification {
     if (self.captureMonitor) {
         [self finishCapture];
-        self.shortcutFeedback.stringValue = ShortcutHelp;
+        self.shortcutFeedback.stringValue = ShortcutHelp();
     }
 }
 
 - (void)windowWillClose:(NSNotification *)notification {
     if (notification.object == self.settings && self.captureMonitor) {
         [self finishCapture];
-        self.shortcutFeedback.stringValue = ShortcutHelp;
+        self.shortcutFeedback.stringValue = ShortcutHelp();
     }
 }
 
@@ -341,7 +345,6 @@ static void SettingsTitle(NSView *pane, NSString *title) {
     [self refreshRecording];
     [self refreshLogin];
     [self refreshExcluded];
-    [self requestUsage];
     if (@available(macOS 14.0, *)) {
         [NSApp activate];
     } else {
@@ -354,14 +357,21 @@ static void SettingsTitle(NSView *pane, NSString *title) {
     self.settings = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 712, 403)
         styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskFullSizeContentView
         backing:NSBackingStoreBuffered defer:NO];
-    self.settings.title = @"Pengaturan OpenClipboard";
+    self.settings.identifier = OCSettingsWindowIdentifier;
     self.settings.titleVisibility = NSWindowTitleHidden;
     self.settings.titlebarAppearsTransparent = YES;
     self.settings.releasedWhenClosed = NO;
     self.settings.delegate = self;
     [self.settings center];
 
-    NSView *root = self.settings.contentView;
+    [self buildSettingsContent];
+    [self showSettingsSection:self.settingsNavigation.firstObject];
+}
+
+- (void)buildSettingsContent {
+    self.settings.title = OCText(@"Pengaturan OpenClipboard", @"OpenClipboard Settings");
+    NSView *root = [[NSView alloc] initWithFrame:self.settings.contentView.bounds];
+    self.settings.contentView = root;
     NSVisualEffectView *rail = [[NSVisualEffectView alloc] initWithFrame:NSMakeRect(0,0,179,403)];
     rail.material = NSVisualEffectMaterialSidebar;
     rail.blendingMode = NSVisualEffectBlendingModeWithinWindow;
@@ -380,18 +390,17 @@ static void SettingsTitle(NSView *pane, NSString *title) {
     self.settingsPages = [[NSTabView alloc] initWithFrame:NSMakeRect(205,22,480,350)];
     self.settingsPages.tabViewType = NSNoTabsNoBorder;
     [root addSubview:self.settingsPages];
-    NSArray *sections = @[@"Mulai", @"Umum", @"Riwayat", @"Privasi"];
-    NSArray *icons = @[@"sparkles", @"slider.horizontal.3", @"clock.arrow.circlepath", @"lock.shield"];
+    NSArray *sections = @[OCText(@"Umum", @"General"), OCText(@"Riwayat", @"History"), OCText(@"Privasi", @"Privacy")];
+    NSArray *icons = @[@"slider.horizontal.3", @"clock.arrow.circlepath", @"lock.shield"];
     NSMutableArray *navigation = [NSMutableArray array];
     for (NSUInteger i=0; i<sections.count; i++) {
-        NSTabViewItem *item = [[NSTabViewItem alloc] initWithIdentifier:sections[i]];
+        NSTabViewItem *item = [[NSTabViewItem alloc] initWithIdentifier:@(i)];
         item.label = sections[i];
         item.view = [[NSView alloc] initWithFrame:NSMakeRect(0,0,480,350)];
         [self.settingsPages addTabViewItem:item];
-        if (i==0) [self buildStart:item.view];
-        if (i==1) [self buildGeneral:item.view];
-        if (i==2) [self buildHistory:item.view];
-        if (i==3) [self buildPrivacy:item.view];
+        if (i==0) [self buildGeneral:item.view];
+        if (i==1) [self buildHistory:item.view];
+        if (i==2) [self buildPrivacy:item.view];
 
         NSImage *image = [NSImage imageWithSystemSymbolName:icons[i] accessibilityDescription:nil];
         NSButton *button = [OCSettingsNavButton buttonWithTitle:sections[i] image:image target:self
@@ -407,17 +416,8 @@ static void SettingsTitle(NSView *pane, NSString *title) {
         [navigation addObject:button];
     }
     self.settingsNavigation = navigation;
-    // The first visit explains how to use the app. A missing shortcut sends the user straight to Umum.
-    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
-    BOOL introduced = [defaults boolForKey:@"OCDidShowStart"];
-    [defaults setBool:YES forKey:@"OCDidShowStart"];
-    [self showSettingsSection:self.settingsNavigation[(introduced || self.shortcutID < 0) ? 1 : 0]];
-
     NSImage *power = [NSImage imageWithSystemSymbolName:@"power" accessibilityDescription:nil];
-    NSBox *divider = [[NSBox alloc] initWithFrame:NSMakeRect(18,58,143,1)];
-    divider.boxType = NSBoxSeparator;
-    [rail addSubview:divider];
-    NSButton *quit = [OCSettingsNavButton buttonWithTitle:@"Keluar" image:power target:self action:@selector(confirmQuit:)];
+    NSButton *quit = [OCSettingsNavButton buttonWithTitle:OCText(@"Keluar", @"Quit") image:power target:self action:@selector(confirmQuit:)];
     quit.frame = NSMakeRect(12,14,155,36);
     quit.bordered = NO;
     quit.contentTintColor = NSColor.secondaryLabelColor;
@@ -427,7 +427,7 @@ static void SettingsTitle(NSView *pane, NSString *title) {
 
     [self updateShortcutLabel];
     if (self.shortcutID < 0) {
-        self.shortcutFeedback.stringValue = @"Shortcut belum aktif. Pilih kombinasi lain.";
+        self.shortcutFeedback.stringValue = OCText(@"Shortcut belum aktif. Pilih kombinasi lain.", @"The shortcut is inactive. Choose another combination.");
     }
 }
 
@@ -441,66 +441,32 @@ static void SettingsTitle(NSView *pane, NSString *title) {
     }
 }
 
-- (void)buildStart:(NSView *)view {
-    SettingsTitle(view, @"Mulai");
-    SettingsGroup(view,140,150);
-    SettingsGroup(view,31,97);
-
-    NSArray *steps = @[
-        @[@"Salin seperti biasa", @"Teks, tautan, gambar, dan warna terekam otomatis di Mac ini."],
-        @[@"", @"Cari atau pilih klip dengan panah. Ketik langsung untuk mencari."],
-        @[@"Tekan Enter untuk menempel", @"Spasi untuk pratinjau, ⌫ untuk hapus, Esc untuk menutup panel."],
-    ];
-    for (NSUInteger i = 0; i < steps.count; i++) {
-        CGFloat top = 256 - i*44;
-        NSTextField *title = PlaceLabel(view, steps[i][0], NSMakeRect(15,top,450,20), NO);
-        title.font = [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold];
-        PlaceLabel(view, steps[i][1], NSMakeRect(15,top-19,450,17), YES).font = [NSFont systemFontOfSize:12];
-        if (i == 1) self.onboardShortcut = title;
-    }
-
-    self.onboardAccessibility = PlaceLabel(view, @"", NSMakeRect(15,102,450,20), NO);
-    self.onboardAccessibility.font = [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold];
-    NSTextField *detail = [NSTextField wrappingLabelWithString:
-        @"Opsional. Enter langsung menempel ke aplikasi asal, dan daftar muncul dekat kursor teks. "
-        @"Tanpa izin, klip hanya disalin: tekan ⌘V."];
-    detail.font = [NSFont systemFontOfSize:12];
-    detail.textColor = NSColor.secondaryLabelColor;
-    detail.frame = NSMakeRect(15,66,450,34);
-    [view addSubview:detail];
-    self.onboardGuideButton = PlaceButton(view, @"Aktifkan Accessibility…", self,
-        @selector(requestCaret:), NSMakeRect(13,36,200,28));
-    [self refreshOnboarding];
-}
-
-- (void)refreshOnboarding {
-    BOOL ready = OCAccessibilityReady();
-    self.onboardAccessibility.stringValue = ready ? @"Tempel otomatis  ·  Aktif" : @"Tempel otomatis  ·  Belum aktif";
-    self.onboardGuideButton.hidden = ready;
-    NSString *label = [NSUserDefaults.standardUserDefaults stringForKey:ShortcutLabel] ?: @"⌘⇧V";
-    self.onboardShortcut.stringValue = self.shortcutID >= 0
-        ? [NSString stringWithFormat:@"Tekan %@ dari aplikasi mana pun", label]
-        : @"Shortcut belum aktif. Atur di tab Umum.";
-}
-
 - (void)buildGeneral:(NSView *)view {
-    SettingsTitle(view, @"Umum");
+    SettingsTitle(view, OCText(@"Umum", @"General"));
+    NSString *language = OCText(@"Bahasa", @"Language");
+    PlaceLabel(view, language, NSMakeRect(246,314,78,20), NO);
+    NSPopUpButton *languagePicker = OCGlassPopup(NSMakeRect(326,306,154,34), view);
+    [languagePicker addItemsWithTitles:@[@"Bahasa Indonesia", @"English"]];
+    [languagePicker selectItemAtIndex:OCUsesEnglish() ? 1 : 0];
+    [languagePicker setAccessibilityLabel:language];
+    languagePicker.target = self;
+    languagePicker.action = @selector(changeLanguage:);
     SettingsGroup(view,223,76);
     SettingsGroup(view,77,135);
     SettingsGroup(view,8,63);
 
-    PlaceLabel(view, @"Shortcut global", NSMakeRect(15,262,154,20), NO);
+    PlaceLabel(view, OCText(@"Shortcut global", @"Global shortcut"), NSMakeRect(15,262,154,20), NO);
     self.shortcutValue = PlaceLabel(view, @"", NSMakeRect(159,261,94,23), NO);
     self.shortcutValue.font = [NSFont monospacedSystemFontOfSize:15 weight:NSFontWeightSemibold];
-    self.shortcutCapture = PlaceButton(view, @"Ubah…", self, @selector(captureShortcut:), NSMakeRect(244,254,86,32));
-    PlaceButton(view, @"Pulihkan bawaan", self, @selector(resetShortcut:), NSMakeRect(336,254,130,32));
-    self.shortcutFeedback = PlaceLabel(view, ShortcutHelp, NSMakeRect(15,233,450,18), YES);
+    self.shortcutCapture = PlaceButton(view, OCText(@"Ubah…", @"Change…"), self, @selector(captureShortcut:), NSMakeRect(244,254,86,32));
+    PlaceButton(view, OCText(@"Pulihkan bawaan", @"Restore Default"), self, @selector(resetShortcut:), NSMakeRect(336,254,130,32));
+    self.shortcutFeedback = PlaceLabel(view, ShortcutHelp(), NSMakeRect(15,233,450,18), YES);
 
-    PlaceLabel(view, @"Tampilan clipboard", NSMakeRect(18,185,192,20), NO).font =
+    PlaceLabel(view, OCText(@"Tampilan clipboard", @"Clipboard layout"), NSMakeRect(18,185,192,20), NO).font =
         [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold];
     BOOL bottomMode = [NSUserDefaults.standardUserDefaults boolForKey:BottomMode];
     NSMutableArray<NSButton *> *modeButtons = [NSMutableArray array];
-    NSArray<NSString *> *titles = @[@"Dekat kursor teks", @"Panel bawah layar"];
+    NSArray<NSString *> *titles = @[OCText(@"Dekat kursor teks", @"Near the text cursor"), OCText(@"Panel bawah layar", @"Bottom of the screen")];
     for (NSInteger mode = 0; mode < (NSInteger)titles.count; mode++) {
         CGFloat x = 18+mode*232;
         NSButton *button = [NSButton radioButtonWithTitle:titles[(NSUInteger)mode] target:self action:@selector(changeMode:)];
@@ -518,79 +484,89 @@ static void SettingsTitle(NSView *pane, NSString *title) {
     }
     self.modeButtons = modeButtons;
 
-    NSButton *glass = [NSButton checkboxWithTitle:@"Gunakan Liquid Glass" target:self
+    NSButton *glass = [NSButton checkboxWithTitle:OCText(@"Gunakan Liquid Glass", @"Use Liquid Glass") target:self
                                             action:@selector(toggleLiquidGlass:)];
     glass.frame = NSMakeRect(18,82,210,22);
     if (@available(macOS 26.0, *)) {
         glass.state = [NSUserDefaults.standardUserDefaults boolForKey:OCLiquidGlassPreference]
             ? NSControlStateValueOn : NSControlStateValueOff;
-        glass.toolTip = @"Berlaku saat riwayat dibuka lagi.";
+        glass.toolTip = OCText(@"Berlaku saat riwayat dibuka lagi.", @"Applies the next time you open history.");
     } else {
         glass.enabled = NO;
-        PlaceLabel(view, @"Perlu macOS 26 atau lebih baru.", NSMakeRect(233,83,227,20), YES);
+        PlaceLabel(view, OCText(@"Perlu macOS 26 atau lebih baru.", @"Requires macOS 26 or later."), NSMakeRect(233,83,227,20), YES);
     }
     [view addSubview:glass];
 
-    self.loginButton = [NSButton checkboxWithTitle:@"Jalankan saat login" target:self action:@selector(toggleLogin:)];
+    self.loginButton = [NSButton checkboxWithTitle:OCText(@"Jalankan saat login", @"Launch at login") target:self action:@selector(toggleLogin:)];
     self.loginButton.frame = NSMakeRect(15,38,227,24);
     [view addSubview:self.loginButton];
     self.loginStatus = PlaceLabel(view, @"", NSMakeRect(33,17,236,19), YES);
-    PlaceButton(view, @"Buka Pengaturan Login", self, @selector(openLoginSettings:), NSMakeRect(261,24,202,30));
+    PlaceButton(view, OCText(@"Buka Pengaturan Login", @"Open Login Settings"), self, @selector(openLoginSettings:), NSMakeRect(261,24,202,30));
+}
+
+- (void)changeLanguage:(NSPopUpButton *)sender {
+    BOOL english = sender.indexOfSelectedItem == 1;
+    if (english == OCUsesEnglish()) return;
+    NSInteger section = [self.settingsPages indexOfTabViewItem:self.settingsPages.selectedTabViewItem];
+    [self finishCapture];
+    [NSUserDefaults.standardUserDefaults setObject:english ? @"en" : @"id" forKey:OCLanguagePreference];
+    [self installMainMenu];
+    [self.accessibilityGuide reloadLanguage];
+    [self.recorder updateStatus];
+    [self buildSettingsContent];
+    [self showSettingsSection:self.settingsNavigation[section]];
+    [self showSettings];
 }
 
 - (void)buildHistory:(NSView *)view {
-    SettingsTitle(view, @"Riwayat");
+    SettingsTitle(view, OCText(@"Riwayat", @"History"));
     SettingsGroup(view,207,80);
-    SettingsGroup(view,64,127);
-    SettingsGroup(view,8,46);
+    SettingsGroup(view,125,66);
+    SettingsGroup(view,37,78);
 
     self.historyStatus = PlaceLabel(view, @"", NSMakeRect(15,248,194,21), NO);
     self.historyStatus.font = [NSFont systemFontOfSize:14 weight:NSFontWeightSemibold];
-    self.retryButton = PlaceButton(view, @"Coba lagi", self, @selector(retryClipboard:), NSMakeRect(362,242,101,31));
-    self.historyFeedback = PlaceLabel(view, HistoryStorageNote, NSMakeRect(15,218,446,22), YES);
+    self.retryButton = PlaceButton(view, OCText(@"Coba lagi", @"Retry"), self, @selector(retryClipboard:), NSMakeRect(362,242,101,31));
+    self.historyFeedback = PlaceLabel(view, HistoryStorageNote(), NSMakeRect(15,218,446,22), YES);
 
-    PlaceLabel(view, @"Batas jumlah klip biasa", NSMakeRect(15,159,225,20), NO);
-    self.historyLimit = [OCEditableTextField textFieldWithString:[NSString stringWithFormat:@"%ld",
-        (long)[NSUserDefaults.standardUserDefaults integerForKey:HistoryLimit]]];
-    self.historyLimit.frame = NSMakeRect(292,157,77,25);
-    self.historyLimit.alignment = NSTextAlignmentCenter;
-    self.historyLimit.target = self;
-    self.historyLimit.action = @selector(saveLimit:);
-    [self.historyLimit setAccessibilityLabel:@"Batas jumlah klip biasa"];
-    [view addSubview:self.historyLimit];
-    PlaceButton(view, @"Simpan", self, @selector(saveLimit:), NSMakeRect(372,153,91,31));
-
-    PlaceLabel(view, @"Durasi simpan klip biasa", NSMakeRect(15,120,235,21), NO);
+    PlaceLabel(view, OCText(@"Durasi simpan klip biasa", @"Keep regular clips for"), NSMakeRect(15,159,235,21), NO);
     [self buildHistoryRetention:view];
-    PlaceLabel(view, @"Klip sematan dan klip di koleksi tetap disimpan.", NSMakeRect(15,94,448,18), YES);
+    PlaceLabel(view, OCText(@"Klip sematan dan klip di koleksi tetap disimpan.", @"Pinned clips and clips in collections are kept."), NSMakeRect(15,133,448,18), YES);
 
-    self.usage = PlaceLabel(view, @"", NSMakeRect(15,72,448,19), YES);
-    PlaceButton(view, @"Bersihkan riwayat…", self, @selector(clearOrdinary:), NSMakeRect(13,15,178,31));
-    NSButton *clear = PlaceButton(view, @"Hapus semua klip…", self, @selector(clearAll:), NSMakeRect(196,15,162,31));
+    PlaceButton(view, OCText(@"Bersihkan riwayat…", @"Clear History…"), self, @selector(clearOrdinary:), NSMakeRect(13,79,178,31));
+    NSButton *clear = PlaceButton(view, OCText(@"Hapus semua klip…", @"Delete All Clips…"), self, @selector(clearAll:), NSMakeRect(244,79,162,31));
     clear.contentTintColor = NSColor.systemRedColor;
+    NSTextField *ordinaryHelp = [NSTextField wrappingLabelWithString:
+        OCText(@"Hapus klip biasa. Klip sematan dan klip di koleksi tetap tersimpan.",
+               @"Delete regular clips. Keep pinned clips and clips in collections.")];
+    ordinaryHelp.font = [NSFont systemFontOfSize:12];
+    ordinaryHelp.textColor = NSColor.secondaryLabelColor;
+    ordinaryHelp.frame = NSMakeRect(15,43,215,36);
+    [view addSubview:ordinaryHelp];
+    NSTextField *allHelp = [NSTextField wrappingLabelWithString:
+        OCText(@"Hapus semua klip, termasuk klip sematan. Koleksi jadi kosong.",
+               @"Delete all clips, including pinned clips. Collections become empty.")];
+    allHelp.font = ordinaryHelp.font;
+    allHelp.textColor = NSColor.secondaryLabelColor;
+    allHelp.frame = NSMakeRect(246,43,219,36);
+    [view addSubview:allHelp];
 }
 
 - (void)buildPrivacy:(NSView *)view {
-    SettingsTitle(view, @"Privasi");
+    SettingsTitle(view, OCText(@"Privasi", @"Privacy"));
     SettingsGroup(view,193,94);
-    SettingsGroup(view,136,45);
     SettingsGroup(view,8,116);
 
     self.clipboardPermission = PlaceLabel(view, @"", NSMakeRect(15,248,225,20), NO);
     self.caretPermission = PlaceLabel(view, @"", NSMakeRect(15,211,215,20), NO);
-    PlaceButton(view, @"Buka Privasi & Keamanan", self, @selector(openPrivacy:), NSMakeRect(245,242,217,31));
-    self.guideButton = PlaceButton(view, @"Aktifkan Accessibility…", self,
+    PlaceButton(view, OCText(@"Buka Privasi & Keamanan", @"Open Privacy & Security"), self, @selector(openPrivacy:), NSMakeRect(245,242,217,31));
+    self.guideButton = PlaceButton(view, OCText(@"Aktifkan Accessibility…", @"Enable Accessibility…"), self,
         @selector(requestCaret:), NSMakeRect(213,204,249,32));
-    self.guideButton.toolTip = @"Buka panduan untuk posisi dekat kursor teks dan tempel langsung.";
+    self.guideButton.toolTip = OCText(@"Buka panduan untuk posisi dekat kursor teks dan tempel langsung.", @"Open the guide to show the picker near the text cursor and paste directly.");
 
-    self.detection = [NSButton checkboxWithTitle:@"Deteksi pola sensitif" target:self action:@selector(toggleDetection:)];
-    self.detection.frame = NSMakeRect(15,146,340,25);
-    self.detection.state = [NSUserDefaults.standardUserDefaults boolForKey:@"OCDetectSensitive"] ? NSControlStateValueOn : NSControlStateValueOff;
-    [view addSubview:self.detection];
-
-    PlaceLabel(view, @"Aplikasi yang dikecualikan", NSMakeRect(15,96,250,19), NO);
-    PlaceButton(view, @"Tambah…", self, @selector(addExclusion:), NSMakeRect(273,91,93,31));
-    self.removeExclusionButton = PlaceButton(view, @"Hapus", self, @selector(removeExclusion:), NSMakeRect(369,91,94,31));
+    PlaceLabel(view, OCText(@"Aplikasi yang dikecualikan", @"Excluded apps"), NSMakeRect(15,96,250,19), NO);
+    PlaceButton(view, OCText(@"Tambah…", @"Add…"), self, @selector(addExclusion:), NSMakeRect(273,91,93,31));
+    self.removeExclusionButton = PlaceButton(view, OCText(@"Hapus", @"Remove"), self, @selector(removeExclusion:), NSMakeRect(369,91,94,31));
     self.removeExclusionButton.enabled = NO;
 
     [view addSubview:[[OCSettingsWell alloc] initWithFrame:NSMakeRect(15,40,447,48)]];
@@ -612,49 +588,47 @@ static void SettingsTitle(NSView *pane, NSString *title) {
     table.allowsEmptySelection = YES;
     table.dataSource = self;
     table.delegate = self;
-    [table setAccessibilityLabel:@"Aplikasi yang dikecualikan"];
+    [table setAccessibilityLabel:OCText(@"Aplikasi yang dikecualikan", @"Excluded apps")];
     scroll.documentView = table;
     [view addSubview:scroll];
     self.excludedTable = table;
 
-    self.excludedEmpty = PlaceLabel(view, @"Belum ada pengecualian", NSMakeRect(27,56,423,19), YES);
-    PlaceLabel(view, @"Pengecualian mengikuti perkiraan aplikasi sumber.", NSMakeRect(15,14,447,19), YES);
+    self.excludedEmpty = PlaceLabel(view, OCText(@"Belum ada pengecualian", @"No exclusions yet"), NSMakeRect(27,56,423,19), YES);
+    PlaceLabel(view, OCText(@"Pengecualian mengikuti perkiraan aplikasi sumber.", @"Exclusions use the estimated source app."), NSMakeRect(15,14,447,19), YES);
 }
 
 - (void)refreshRecording {
-    self.historyStatus.stringValue = self.recorder.status.length ? self.recorder.status : @"Penyimpanan lokal";
-    self.clipboardPermission.stringValue = [NSString stringWithFormat:@"Izin clipboard  ·  %@", self.recorder.policy ?: @"Ikuti sistem"];
+    self.historyStatus.stringValue = self.recorder.status.length ? self.recorder.status : OCText(@"Penyimpanan lokal", @"Local storage");
+    self.clipboardPermission.stringValue = [NSString stringWithFormat:OCText(@"Izin clipboard  ·  %@", @"Clipboard access  ·  %@"), self.recorder.policy ?: OCText(@"Ikuti sistem", @"System default")];
     self.clipboardPermission.toolTip = self.clipboardPermission.stringValue;
-    BOOL blocked = [self.recorder.status isEqualToString:@"Akses clipboard dibatasi"];
+    BOOL blocked = [self.recorder.status isEqualToString:OCText(@"Akses clipboard dibatasi", @"Clipboard access restricted")];
     self.retryButton.hidden = !blocked;
     self.picker.recordingStatus = self.recorder.status;
 }
 
 - (void)refreshPermissions {
     BOOL ready = OCAccessibilityReady();
-    self.caretPermission.stringValue = ready ? @"Accessibility  ·  Diizinkan" : @"Accessibility  ·  Perlu izin";
+    self.caretPermission.stringValue = ready ? OCText(@"Accessibility  ·  Diizinkan", @"Accessibility  ·  Allowed") : OCText(@"Accessibility  ·  Perlu izin", @"Accessibility  ·  Permission required");
     self.guideButton.hidden = ready;
-    [self refreshOnboarding];
     [self refreshRecording];
 }
 
 - (void)updateShortcutLabel {
-    NSString *label = [NSUserDefaults.standardUserDefaults stringForKey:ShortcutLabel] ?: @"⌘⇧V";
+    NSString *label = CurrentShortcutLabel();
     self.shortcutValue.stringValue = label;
     self.picker.shortcutLabel = self.shortcutID >= 0 ? label : nil;
-    [self refreshOnboarding];
 }
 
 - (void)finishCapture {
     if (self.captureMonitor) [NSEvent removeMonitor:self.captureMonitor];
     self.captureMonitor = nil;
-    self.shortcutCapture.title = @"Ubah…";
+    self.shortcutCapture.title = OCText(@"Ubah…", @"Change…");
 }
 
 - (void)captureShortcut:(NSButton *)sender {
     if (self.captureMonitor) [self finishCapture];
-    sender.title = @"Tekan tombol…";
-    self.shortcutFeedback.stringValue = @"Gunakan ⌘, ⌃, atau ⌥. Esc membatalkan.";
+    sender.title = OCText(@"Tekan tombol…", @"Press a key…");
+    self.shortcutFeedback.stringValue = OCText(@"Gunakan ⌘, ⌃, atau ⌥. Esc membatalkan.", @"Use ⌘, ⌃, or ⌥. Press Esc to cancel.");
     __weak OCApplication *weakSelf = self;
     self.captureMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown handler:^NSEvent *(NSEvent *event) {
         OCApplication *application = weakSelf;
@@ -679,7 +653,7 @@ static void SettingsTitle(NSView *pane, NSString *title) {
 }
 
 - (NSString *)labelForKeyEvent:(NSEvent *)event {
-    NSDictionary *special = @{@36:@"↩", @48:@"⇥", @49:@"Spasi", @51:@"⌫", @123:@"←",
+    NSDictionary *special = @{@36:@"↩", @48:@"⇥", @49:OCText(@"Spasi", @"Space"), @51:@"⌫", @123:@"←",
         @124:@"→", @125:@"↓", @126:@"↑", @122:@"F1", @120:@"F2", @99:@"F3", @118:@"F4",
         @96:@"F5", @97:@"F6", @98:@"F7", @100:@"F8", @101:@"F9", @109:@"F10", @103:@"F11", @111:@"F12"};
     NSString *label = special[@(event.keyCode)] ?: event.charactersIgnoringModifiers.uppercaseString;
@@ -690,7 +664,7 @@ static void SettingsTitle(NSView *pane, NSString *title) {
     int64_t identifier = oc_register_shortcut(key, flags);
     if (identifier < 0) {
         self.shortcutFeedback.stringValue = identifier == -2
-            ? @"Kombinasi ini tidak didukung." : @"Shortcut tidak tersedia. Pilih kombinasi lain.";
+            ? OCText(@"Kombinasi ini tidak didukung.", @"This key combination is unsupported.") : OCText(@"Shortcut tidak tersedia. Pilih kombinasi lain.", @"The shortcut is unavailable. Choose another combination.");
         return;
     }
     self.shortcutID = identifier;
@@ -698,7 +672,7 @@ static void SettingsTitle(NSView *pane, NSString *title) {
     [defaults setInteger:key forKey:ShortcutKey];
     [defaults setInteger:flags forKey:ShortcutFlags];
     [defaults setObject:label forKey:ShortcutLabel];
-    self.shortcutFeedback.stringValue = @"Shortcut aktif.";
+    self.shortcutFeedback.stringValue = OCText(@"Shortcut aktif.", @"Shortcut is active.");
     [self updateShortcutLabel];
 }
 
@@ -721,26 +695,26 @@ static void SettingsTitle(NSView *pane, NSString *title) {
 
 - (void)buildHistoryRetention:(NSView *)view {
     [self.historyRetentionContainer removeFromSuperview];
-    self.historyRetentionContainer = [[NSView alloc] initWithFrame:NSMakeRect(292,113,171,34)];
+    self.historyRetentionContainer = [[NSView alloc] initWithFrame:NSMakeRect(292,152,171,34)];
     [view addSubview:self.historyRetentionContainer];
     self.historyRetention = OCGlassPopup(self.historyRetentionContainer.bounds, self.historyRetentionContainer);
-    for (NSArray *choice in @[@[@"Tanpa batas",@0],@[@"1 hari",@1],@[@"7 hari",@7],
-            @[@"30 hari",@30],@[@"90 hari",@90],@[@"1 tahun",@365]]) {
+    for (NSArray *choice in @[@[OCText(@"Tanpa batas", @"Forever"),@0],@[OCText(@"1 hari", @"1 day"),@1],@[OCText(@"7 hari", @"7 days"),@7],
+            @[OCText(@"30 hari", @"30 days"),@30],@[OCText(@"90 hari", @"90 days"),@90],@[OCText(@"1 tahun", @"1 year"),@365]]) {
         [self.historyRetention addItemWithTitle:choice[0]];
         self.historyRetention.lastItem.tag = [choice[1] integerValue];
     }
     [self.historyRetention selectItemWithTag:[NSUserDefaults.standardUserDefaults integerForKey:HistoryRetentionDays]];
     self.historyRetention.target = self;
     self.historyRetention.action = @selector(changeRetention:);
-    [self.historyRetention setAccessibilityLabel:@"Durasi simpan klip biasa"];
+    [self.historyRetention setAccessibilityLabel:OCText(@"Durasi simpan klip biasa", @"Keep regular clips for")];
 }
 
 - (void)refreshLogin {
     SMAppServiceStatus status = SMAppService.mainAppService.status;
     self.loginButton.state = (status == SMAppServiceStatusEnabled || status == SMAppServiceStatusRequiresApproval)
         ? NSControlStateValueOn : NSControlStateValueOff;
-    self.loginStatus.stringValue = status == SMAppServiceStatusEnabled ? @"Aktif"
-        : status == SMAppServiceStatusRequiresApproval ? @"Perlu persetujuan sistem." : @"Nonaktif";
+    self.loginStatus.stringValue = status == SMAppServiceStatusEnabled ? OCText(@"Aktif", @"On")
+        : status == SMAppServiceStatusRequiresApproval ? OCText(@"Perlu persetujuan sistem.", @"System approval required.") : OCText(@"Nonaktif", @"Off");
 }
 
 - (void)toggleLogin:(NSButton *)sender {
@@ -749,7 +723,7 @@ static void SettingsTitle(NSView *pane, NSString *title) {
                                                         : [SMAppService.mainAppService unregisterAndReturnError:&error];
     [self refreshLogin];
     if (!succeed && SMAppService.mainAppService.status != SMAppServiceStatusRequiresApproval)
-        self.loginStatus.stringValue = @"Pengaturan login gagal diperbarui.";
+        self.loginStatus.stringValue = OCText(@"Pengaturan login gagal diperbarui.", @"Could not update login settings.");
 }
 
 - (void)openLoginSettings:(id)sender { [SMAppService openSystemSettingsLoginItems]; }
@@ -772,10 +746,6 @@ static void SettingsTitle(NSView *pane, NSString *title) {
 
 - (void)openPrivacy:(id)sender {
     [NSWorkspace.sharedWorkspace openURL:[NSURL URLWithString:@"x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension"]];
-}
-
-- (void)toggleDetection:(NSButton *)sender {
-    [NSUserDefaults.standardUserDefaults setBool:sender.state == NSControlStateValueOn forKey:@"OCDetectSensitive"];
 }
 
 - (void)refreshExcluded {
@@ -807,7 +777,7 @@ static void SettingsTitle(NSView *pane, NSString *title) {
     NSOpenPanel *panel = NSOpenPanel.openPanel;
     panel.allowedContentTypes = @[UTTypeApplicationBundle];
     panel.directoryURL = [NSURL fileURLWithPath:@"/Applications" isDirectory:YES];
-    panel.prompt = @"Kecualikan";
+    panel.prompt = OCText(@"Kecualikan", @"Exclude");
     [panel beginSheetModalForWindow:self.settings completionHandler:^(NSModalResponse response) {
         if (response != NSModalResponseOK) return;
         NSString *bundle = [NSBundle bundleWithURL:panel.URL].bundleIdentifier;
@@ -835,25 +805,15 @@ static void SettingsTitle(NSView *pane, NSString *title) {
     [self refreshExcluded];
 }
 
-- (void)saveLimit:(id)sender {
-    NSInteger value = self.historyLimit.integerValue;
-    if (value < 50 || value > 2000) {
-        self.historyFeedback.stringValue = @"Masukkan angka dari 50 sampai 2.000.";
-        return;
-    }
-    if (!OCSend(@{@"action": @"limit", @"limit": @(value)}))
-        self.historyFeedback.stringValue = @"Pengaturan belum tersimpan. Coba lagi.";
-}
-
 - (void)changeRetention:(NSPopUpButton *)sender {
     NSInteger days = sender.selectedItem.tag;
     NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
     if (OCSend(@{@"action": @"retention", @"days": @(days)})) {
         [defaults setInteger:days forKey:HistoryRetentionDays];
-        self.historyFeedback.stringValue = HistoryStorageNote;
+        self.historyFeedback.stringValue = HistoryStorageNote();
     } else {
         [sender selectItemWithTag:[defaults integerForKey:HistoryRetentionDays]];
-        self.historyFeedback.stringValue = @"Durasi simpan belum diperbarui. Coba lagi.";
+        self.historyFeedback.stringValue = OCText(@"Durasi simpan belum diperbarui. Coba lagi.", @"Could not change retention. Try again.");
     }
 }
 
@@ -863,34 +823,20 @@ static void SettingsTitle(NSView *pane, NSString *title) {
 - (void)confirmClear:(BOOL)all {
     OCConfirmClearHistory(self.settings,all,^{
         if (!OCSend(@{@"action": @"clear", @"all": @(all)}))
-            self.historyFeedback.stringValue = @"Riwayat belum dihapus. Coba lagi.";
+            self.historyFeedback.stringValue = OCText(@"Riwayat belum dihapus. Coba lagi.", @"Could not clear history. Try again.");
     });
-}
-
-- (void)requestUsage {
-    if (self.settings.visible) OCSend(@{@"action": @"catalog", @"ticket": @0,
-        @"query": @"", @"kind": @"", @"collection": @0});
 }
 
 - (void)receiveEvent:(NSDictionary *)event {
     NSString *kind = event[@"kind"];
-    if ([kind isEqualToString:@"catalog"]) {
-        NSNumber *bytes = event[@"catalog"][@"usage"];
-        NSString *value = [NSByteCountFormatter stringFromByteCount:bytes.longLongValue countStyle:NSByteCountFormatterCountStyleBinary];
-        self.usage.stringValue = [NSString stringWithFormat:@"Muatan tersimpan  ·  %@ / 256 MiB", value];
-    } else if ([kind isEqualToString:@"changed"] || [kind isEqualToString:@"created"]) {
+    if ([kind isEqualToString:@"changed"] || [kind isEqualToString:@"created"]) {
         [self.recorder storageFull:NO];
-        [self requestUsage];
-    } else if ([kind isEqualToString:@"limit"]) {
-        [NSUserDefaults.standardUserDefaults setObject:event[@"value"] forKey:HistoryLimit];
-        self.historyLimit.stringValue = [event[@"value"] stringValue];
-        self.historyFeedback.stringValue = @"Batas klip disimpan.";
     } else if ([kind isEqualToString:@"error"]) {
         NSString *reason = event[@"reason"];
         BOOL full = [reason isEqualToString:@"full"];
         if (full) [self.recorder storageFull:YES];
         if (self.settings.visible) self.historyFeedback.stringValue = full
-            ? @"Ruang untuk klip baru tidak cukup." : @"Tindakan tidak selesai. Coba lagi.";
+            ? OCText(@"Ruang untuk klip baru tidak cukup.", @"There is no space for new clips.") : OCText(@"Tindakan tidak selesai. Coba lagi.", @"Could not complete the action. Try again.");
     }
     [self.picker receiveEvent:event];
 }
@@ -921,7 +867,7 @@ void oc_event(const char *event) {
     }
 }
 
-void oc_payload(uint64_t ticket, int64_t id, bool sensitive, const OCPart *parts, size_t count) {
+void oc_payload(uint64_t ticket, int64_t id, const OCPart *parts, size_t count) {
     @autoreleasepool {
         NSMutableArray *items = [NSMutableArray arrayWithCapacity:count];
         for (size_t index = 0; index < count; index++) {
@@ -931,7 +877,7 @@ void oc_payload(uint64_t ticket, int64_t id, bool sensitive, const OCPart *parts
             if (type && data) [items addObject:@{@"item": @(part->item), @"type": type, @"data": data}];
         }
         dispatch_async(dispatch_get_main_queue(), ^{
-            [applicationDelegate.picker receivePayload:items ticket:ticket id:id sensitive:sensitive];
+            [applicationDelegate.picker receivePayload:items ticket:ticket id:id];
         });
     }
 }

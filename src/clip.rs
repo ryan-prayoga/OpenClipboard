@@ -51,10 +51,7 @@ pub(crate) struct Summary {
     pub copied: i64,
     pub last_used: i64,
     pub pinned: bool,
-    pub sensitive: bool,
-    pub manually_sensitive: bool,
-    #[serde(skip)]
-    pub bytes: usize,
+    pub character_count: Option<usize>,
     pub width: usize,
     pub height: usize,
     pub color: String,
@@ -101,6 +98,15 @@ impl Part {
             _ => None,
         }
     }
+}
+
+unsafe extern "C" {
+    fn oc_character_count(data: *const u8, length: usize) -> usize;
+}
+
+pub(crate) fn character_count(parts: &[Part]) -> Option<usize> {
+    let text = parts.iter().find_map(Part::text)?;
+    Some(unsafe { oc_character_count(text.as_ptr(), text.len()) })
 }
 
 pub(crate) fn metadata(parts: &[Part], native_color: String) -> (String, String, String, String) {
@@ -220,48 +226,6 @@ fn parse_color(s: &str) -> Option<String> {
     Some(format!("#{:02X}{:02X}{:02X}", byte(r), byte(g), byte(b)))
 }
 
-pub(crate) fn sensitive(parts: &[Part]) -> bool {
-    parts.iter().filter_map(Part::text).any(|text| {
-        if [
-            "-----BEGIN PRIVATE KEY-----",
-            "-----BEGIN RSA PRIVATE KEY-----",
-            "-----BEGIN OPENSSH PRIVATE KEY-----",
-            "-----BEGIN EC PRIVATE KEY-----",
-            "-----BEGIN ENCRYPTED PRIVATE KEY-----",
-            "-----BEGIN PGP PRIVATE KEY BLOCK-----",
-        ]
-        .into_iter()
-        .any(|marker| text.contains(marker))
-        {
-            return true;
-        }
-
-        text.split(|c: char| !c.is_ascii_alphanumeric() && !"-_.".contains(c))
-            .any(|word| {
-                [
-                    ("ghp_", 36),
-                    ("github_pat_", 40),
-                    ("sk-proj-", 32),
-                    ("sk_live_", 24),
-                    ("xoxb-", 20),
-                ]
-                .into_iter()
-                .any(|(prefix, length)| {
-                    word.strip_prefix(prefix).is_some_and(|value| {
-                        value.len() >= length
-                            && value
-                                .bytes()
-                                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
-                    })
-                }) || (word.len() == 20
-                    && word.starts_with("AKIA")
-                    && word
-                        .bytes()
-                        .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit()))
-            })
-    })
-}
-
 #[cfg(test)]
 mod tests {
     #[test]
@@ -309,16 +273,6 @@ mod tests {
             mime: "public.utf8-plain-text".into(),
             data: value.as_bytes().to_vec(),
         }
-    }
-
-    #[test]
-    fn detects_example_secret_shapes_without_treating_short_examples_as_tokens() {
-        assert!(sensitive(&[text(
-            "-----BEGIN OPENSSH PRIVATE KEY-----\nFAKE"
-        )]));
-        let fake_token = format!("ghp_{}", "0".repeat(36));
-        assert!(sensitive(&[text(&fake_token)]));
-        assert!(!sensitive(&[text("ghp_example")]));
     }
 
     #[test]

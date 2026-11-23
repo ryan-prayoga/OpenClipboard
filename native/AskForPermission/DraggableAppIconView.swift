@@ -44,7 +44,10 @@ public final class DraggableAppIconView: NSView, NSDraggingSource {
         appName.setAccessibilityElement(false)
         addSubview(appName)
 
-        let hint = canDrag ? "Seret ke daftar izin" : "Pilih di Pengaturan Sistem"
+        let english = UserDefaults.standard.string(forKey: "OCAppLanguage") == "en"
+        let dragHint = english ? "Drag to the permissions list" : "Seret ke daftar izin"
+        let settingsHint = english ? "Select in System Settings" : "Pilih di Pengaturan Sistem"
+        let hint = canDrag ? dragHint : settingsHint
         let action = NSTextField(labelWithString: hint)
         action.font = .systemFont(ofSize: 12)
         action.textColor = .secondaryLabelColor
@@ -60,7 +63,11 @@ public final class DraggableAppIconView: NSView, NSDraggingSource {
             addSubview(grip)
         }
 
-        if canDrag { toolTip = "Seret OpenClipboard.app ke daftar izin" }
+        if canDrag {
+            toolTip = english
+                ? "Drag OpenClipboard.app to the permissions list"
+                : "Seret OpenClipboard.app ke daftar izin"
+        }
         setAccessibilityElement(true)
         setAccessibilityRole(.image)
         setAccessibilityLabel("OpenClipboard")

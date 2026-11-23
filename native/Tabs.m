@@ -1,3 +1,4 @@
+#import "Native.h"
 #import "Tabs.h"
 #import "Bridge.h"
 #import "Toolbar.h"
@@ -38,11 +39,11 @@ static NSImage *TintedSymbol(NSString *name, CGFloat size, NSColor *color) {
 }
 
 NSArray<NSDictionary *> *OCTabPalette(void) {
-    return @[@{@"key":@"red",@"title":@"Merah"}, @{@"key":@"orange",@"title":@"Oranye"},
-        @{@"key":@"yellow",@"title":@"Kuning"}, @{@"key":@"green",@"title":@"Hijau"},
-        @{@"key":@"teal",@"title":@"Teal"}, @{@"key":@"blue",@"title":@"Biru"},
-        @{@"key":@"purple",@"title":@"Ungu"}, @{@"key":@"pink",@"title":@"Merah muda"},
-        @{@"key":@"gray",@"title":@"Abu-abu"}];
+    return @[@{@"key":@"red",@"title":OCText(@"Merah", @"Red")}, @{@"key":@"orange",@"title":OCText(@"Oranye", @"Orange")},
+        @{@"key":@"yellow",@"title":OCText(@"Kuning", @"Yellow")}, @{@"key":@"green",@"title":OCText(@"Hijau", @"Green")},
+        @{@"key":@"teal",@"title":@"Teal"}, @{@"key":@"blue",@"title":OCText(@"Biru", @"Blue")},
+        @{@"key":@"purple",@"title":OCText(@"Ungu", @"Purple")}, @{@"key":@"pink",@"title":OCText(@"Merah muda", @"Pink")},
+        @{@"key":@"gray",@"title":OCText(@"Abu-abu", @"Gray")}];
 }
 
 NSColor *OCTabColor(NSString *key, int64_t collectionID) {
@@ -126,7 +127,7 @@ NSColor *OCTabColor(NSString *key, int64_t collectionID) {
 
 - (NSString *)titleAtIndex:(NSInteger)index {
     if (index >= self.tabCount) return @"";
-    return index == 0 ? @"Riwayat" : self.collections[(NSUInteger)index - 1][@"name"] ?: @"";
+    return index == 0 ? OCText(@"Riwayat", @"History") : self.collections[(NSUInteger)index - 1][@"name"] ?: @"";
 }
 
 - (void)setCollections:(NSArray<NSDictionary *> *)collections {
@@ -360,7 +361,7 @@ NSColor *OCTabColor(NSString *key, int64_t collectionID) {
     self.editingID = collectionID;
     self.editingInitial = initial;
     NSTextField *field = [OCEditableTextField textFieldWithString:initial];
-    field.placeholderString = self.orientation == OCTabsVertical ? @"Nama baru" : @"Nama koleksi";
+    field.placeholderString = self.orientation == OCTabsVertical ? OCText(@"Nama baru", @"New name") : OCText(@"Nama koleksi", @"Collection name");
     field.font = self.font;
     field.bordered = NO;
     field.drawsBackground = NO;
@@ -368,7 +369,7 @@ NSColor *OCTabColor(NSString *key, int64_t collectionID) {
     field.lineBreakMode = NSLineBreakByTruncatingTail;
     field.usesSingleLineMode = YES;
     field.delegate = self;
-    [field setAccessibilityLabel:collectionID ? @"Ubah nama koleksi" : @"Nama koleksi baru"];
+    [field setAccessibilityLabel:collectionID ? OCText(@"Ubah nama koleksi", @"Rename collection") : OCText(@"Nama koleksi baru", @"New collection name")];
     self.editor = field;
     [self addSubview:field];
     [self scrollIndexToVisible:self.editingIndex];
@@ -413,7 +414,7 @@ NSColor *OCTabColor(NSString *key, int64_t collectionID) {
 
 - (BOOL)isAccessibilityElement { return YES; }
 - (NSAccessibilityRole)accessibilityRole { return NSAccessibilityTabGroupRole; }
-- (NSString *)accessibilityLabel { return @"Koleksi"; }
+- (NSString *)accessibilityLabel { return OCText(@"Koleksi", @"Collections"); }
 
 - (NSArray *)accessibilityChildren {
     NSMutableArray *elements = [NSMutableArray array];
@@ -423,8 +424,8 @@ NSColor *OCTabColor(NSString *key, int64_t collectionID) {
         NSRect screen = [self.window convertRectToScreen:[self convertRect:[self frameAtIndex:add ? self.plusIndex : i]
                                                                     toView:nil]];
         OCTabElement *element = [OCTabElement accessibilityElementWithRole:NSAccessibilityRadioButtonRole
-            frame:screen label:add ? @"Tambah koleksi" : i == 0 ? @"Riwayat"
-                : [NSString stringWithFormat:@"Koleksi %@",[self titleAtIndex:i]] parent:self];
+            frame:screen label:add ? OCText(@"Tambah koleksi", @"Add collection") : i == 0 ? OCText(@"Riwayat", @"History")
+                : [NSString stringWithFormat:OCText(@"Koleksi %@", @"Collection %@"),[self titleAtIndex:i]] parent:self];
         element.selected = !add && i == self.selectedIndex;
         element.press = ^{
             OCTabs *tabs = weakSelf;

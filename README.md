@@ -60,9 +60,9 @@ Di tab **Umum**, kamu bisa mengganti pintasan global, memilih tampilan riwayat, 
   <img src="docs/screenshots/pengaturan.png" alt="Tab Umum dengan pengaturan pintasan, tampilan riwayat, Liquid Glass, dan jalankan saat login" width="712">
 </p>
 
-Riwayat disimpan secara lokal di `~/Library/Application Support/OpenClipboard/history.sqlite3`. Dari tab **Riwayat**, kamu bisa mengatur batas jumlah klip biasa dan berapa lama klip disimpan. Klip yang disematkan atau masuk koleksi dikecualikan dari batas riwayat biasa.
+Riwayat disimpan secara lokal di `~/Library/Application Support/OpenClipboard/history.sqlite3`. Dari tab **Riwayat**, kamu bisa mengatur durasi simpan klip biasa. Kuota 256 MiB mencakup isi klip dan thumbnail lokal. Saat kuota penuh, OpenClipboard menghapus klip biasa yang paling lama disalin untuk menyediakan ruang. Klip sematan dan klip di koleksi dilindungi dari penghapusan otomatis.
 
-Gunakan tab **Privasi** untuk mengecualikan aplikasi tertentu atau mengatur deteksi pola sensitif. Klip yang ditandai sensitif secara manual atau terdeteksi lewat pola hanya disimpan di memori selama OpenClipboard berjalan.
+Gunakan tab **Privasi** untuk mengecualikan aplikasi tertentu dari riwayat clipboard.
 
 ## Build dari source
 

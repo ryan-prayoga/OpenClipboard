@@ -254,7 +254,7 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
 @property(nonatomic, strong) NSButton *undoButton;
 @property(nonatomic) uint64_t undoTicket;
 @property(nonatomic) BOOL undoPending;
-@property(nonatomic, copy) NSString *undoMessage;
+@property(nonatomic) NSUInteger undoCount;
 @property(nonatomic, strong) OCResults *results;
 @property(nonatomic, strong) NSScrollView *scroll;
 @property(nonatomic, strong) NSPopover *preview;
@@ -281,7 +281,6 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
 @property(nonatomic, copy) NSDictionary<NSNumber *, NSNumber *> *dragClips;
 @property(nonatomic, strong) NSMutableDictionary<NSNumber *, NSArray<NSPasteboardItem *> *> *dragItems;
 @property(nonatomic) uint64_t panelToken;
-@property(nonatomic) int64_t revealed;
 @property(nonatomic) OCPayloadMode payloadMode;
 @property(nonatomic, strong) NSPanel *toast;
 @property(nonatomic) uint64_t toastTicket;
@@ -315,7 +314,6 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
     self.activeTab = 0;
     self.revealTab = NO;
     self.clips = @[];
-    self.revealed = 0;
     self.payloadMode = OCIdle;
     self.searchStarted = 0;
     self.catalogPending = NO;
@@ -369,7 +367,7 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
         [closing orderOut:nil];
         self.closingPanel = nil;
     }
-    NSPanel *panel = MakePanel(startFrame, @"Riwayat OpenClipboard");
+    NSPanel *panel = MakePanel(startFrame, OCText(@"Riwayat OpenClipboard", @"OpenClipboard History"));
     if (slideIn) {
         panel.animationBehavior = NSWindowAnimationBehaviorNone;
         panel.alphaValue = startOpacity;
@@ -405,7 +403,7 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
     __weak OCPicker *weakSelf = self;
 
     self.action = OCToolbarIcon(NSMakeRect(buttonX,barY,control,control), view,
-        @"ellipsis", @"Tindakan", self, @selector(actions:));
+        @"ellipsis", OCText(@"Tindakan", @"Actions"), self, @selector(actions:));
     CGFloat railWidth = 0;
     if (self.bottom) {
         CGFloat searchWidth = MAX(120,MIN(260,(buttonX-gap-edge)*0.4));
@@ -490,7 +488,7 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
     OCToolbarSearchField *search = [[OCToolbarSearchField alloc] initWithFrame:
         NSMakeRect(SearchFieldInset,fieldY,MAX(10,NSWidth(rect)-61),fieldHeight)];
     search.autoresizingMask = NSViewWidthSizable;
-    search.placeholderString = @"Cari klip";
+    search.placeholderString = OCText(@"Cari klip", @"Search clips");
     search.font = [NSFont systemFontOfSize:13 weight:NSFontWeightMedium];
     search.bezeled = NO;
     search.bordered = NO;
@@ -509,7 +507,7 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
     clear.autoresizingMask = NSViewMinXMargin;
     clear.bordered = NO;
     clear.contentTintColor = NSColor.labelColor;
-    [clear setAccessibilityLabel:@"Hapus pencarian"];
+    [clear setAccessibilityLabel:OCText(@"Hapus pencarian", @"Clear search")];
     [surface addSubview:clear];
     search.clearButton = clear;
     [search refreshClearButton];
@@ -563,7 +561,7 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
         handler:^NSEvent *(NSEvent *event) {
         OCPicker *picker = weakSelf;
         if (!picker) return event;
-        if ([event.window.title isEqualToString:@"Pengaturan OpenClipboard"] && event.type != NSEventTypeLeftMouseUp) {
+        if ([event.window.identifier isEqualToString:OCSettingsWindowIdentifier] && event.type != NSEventTypeLeftMouseUp) {
             [picker dismissRestoringFocus:NO];
             return event;
         }
@@ -681,7 +679,7 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 120 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
             OCPicker *picker = weakSelf;
             if (picker.catalogTicket != ticket || !picker.catalogPending || picker.results.rows.count) return;
-            [picker.results showEmptyTitle:@"Memuat klip…" detail:nil announce:NO];
+            [picker.results showEmptyTitle:OCText(@"Memuat klip…", @"Loading clips…") detail:nil announce:NO];
             [picker.results layoutRows];
         });
     }
@@ -692,10 +690,10 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
     self.catalogFailed = YES;
     if (self.results.actionsSuspended) self.results.rows = @[];
     if (!self.results.rows.count) {
-        [self.results showEmptyTitle:@"Riwayat gagal dimuat" detail:@"Tekan Enter untuk mencoba lagi." announce:YES];
+        [self.results showEmptyTitle:OCText(@"Riwayat gagal dimuat", @"Could not load history") detail:OCText(@"Tekan Enter untuk mencoba lagi.", @"Press Enter to retry.") announce:YES];
         [self.results layoutRows];
     } else {
-        [self setWarning:@"Riwayat gagal diperbarui."];
+        [self setWarning:OCText(@"Riwayat gagal diperbarui.", @"Could not refresh history.")];
     }
 }
 
@@ -721,8 +719,7 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
     if ([kind isEqualToString:@"deleted"]) {
         self.undoTicket = [event[@"ticket"] unsignedLongLongValue];
         self.undoPending = NO;
-        NSUInteger count = [event[@"count"] unsignedIntegerValue];
-        self.undoMessage = [NSString stringWithFormat:@"%lu klip dihapus.",(unsigned long)count];
+        self.undoCount = [event[@"count"] unsignedIntegerValue];
         [self refreshUndoControls];
         [self setMessage:self.recordingStatus];
         return;
@@ -731,9 +728,9 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
         if ([event[@"ticket"] unsignedLongLongValue] != self.undoTicket) return;
         self.undoTicket = 0;
         self.undoPending = NO;
-        self.undoMessage = nil;
+        self.undoCount = 0;
         [self refreshUndoControls];
-        [self setMessage:[kind isEqualToString:@"delete_undone"] ? @"Klip dipulihkan." : self.recordingStatus];
+        [self setMessage:[kind isEqualToString:@"delete_undone"] ? OCText(@"Klip dipulihkan.", @"Clips restored.") : self.recordingStatus];
         return;
     }
     if ([kind isEqualToString:@"undo_failed"]) {
@@ -741,25 +738,24 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
         self.undoPending = NO;
         [self refreshUndoControls];
         [self setWarning:[event[@"reason"] isEqualToString:@"undo_full"]
-            ? @"Batas riwayat tercapai." : @"Klip belum dipulihkan."];
+            ? OCText(@"Batas riwayat tercapai.", @"History limit reached.") : OCText(@"Klip belum dipulihkan.", @"Could not restore the clips.")];
         return;
     }
     if (!self.panel) return;
     if ([kind isEqualToString:@"changed"]) {
         [self fetchCatalog];
     } else if ([kind isEqualToString:@"created"]) {
-        [self setMessage:@"Koleksi dibuat."];
+        [self setMessage:OCText(@"Koleksi dibuat.", @"Collection created.")];
         if (event[@"id"]) [self selectTab:[event[@"id"] longLongValue]];
         else [self fetchCatalog];
     } else if ([kind isEqualToString:@"error"]) {
         NSString *reason = event[@"reason"];
         [self clearPendingDrag];
         self.payloadMode = OCIdle;
-        NSString *description = @{@"full":@"Ruang penyimpanan tidak cukup.",
-            @"missing":@"Klip ini sudah tidak tersedia.", @"collection_name":@"Nama koleksi kosong, terlalu panjang, atau sudah dipakai.",
-            @"collection_missing":@"Koleksi sudah tidak tersedia.",
-            @"not_manually_sensitive":@"Klip ini ditandai oleh deteksi otomatis."}[reason];
-        [self setWarning:description ?: @"Tindakan gagal. Coba lagi."];
+        NSString *description = @{@"full":OCText(@"Ruang penyimpanan tidak cukup.", @"There is not enough storage."),
+            @"missing":OCText(@"Klip ini sudah tidak tersedia.", @"This clip is no longer available."), @"collection_name":OCText(@"Nama koleksi kosong, terlalu panjang, atau sudah dipakai.", @"The collection name is empty, too long, or already in use."),
+            @"collection_missing":OCText(@"Koleksi sudah tidak tersedia.", @"This collection is no longer available.")}[reason];
+        [self setWarning:description ?: OCText(@"Tindakan gagal. Coba lagi.", @"The action failed. Try again.")];
     } else if ([kind isEqualToString:@"catalog_failed"]) {
         if ([event[@"ticket"] unsignedLongLongValue] == self.catalogTicket) [self catalogDidFail];
     } else if ([kind isEqualToString:@"catalog"] && [event[@"ticket"] unsignedLongLongValue] == self.catalogTicket) {
@@ -780,20 +776,14 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
             [self.tabs scrollSelectedToVisible];
         }
         self.clips = catalog[@"clips"] ?: @[];
-        for (NSDictionary *clip in self.clips) {
-            if ([clip[@"sensitive"] boolValue]) {
-                [self.images removeObjectForKey:clip[@"id"]];
-                [self.requested removeObject:clip[@"id"]];
-            }
-        }
         OCResults *result = self.activeResults;
         BOOL query = self.activeSearch.stringValue.length > 0;
-        NSString *title = query ? @"Tidak ada hasil" : self.activeTab ? @"Koleksi masih kosong" : @"Belum ada klip";
+        NSString *title = query ? OCText(@"Tidak ada hasil", @"No results") : self.activeTab ? OCText(@"Koleksi masih kosong", @"This collection is empty") : OCText(@"Belum ada klip", @"No clips yet");
         NSString *detail = nil;
         if (!query && !self.activeTab) {
             detail = self.shortcutLabel.length
-                ? [NSString stringWithFormat:@"Salin teks atau gambar, lalu tekan %@.",self.shortcutLabel]
-                : @"Salin teks atau gambar untuk mulai mengisi riwayat.";
+                ? [NSString stringWithFormat:OCText(@"Salin teks atau gambar, lalu tekan %@.", @"Copy text or an image, then press %@."),self.shortcutLabel]
+                : OCText(@"Salin teks atau gambar untuk mulai mengisi riwayat.", @"Copy text or an image to start building your history.");
         }
         [self renderRows:self.clips in:result emptyTitle:title detail:detail announce:query];
         [self loadVisibleImages];
@@ -805,15 +795,13 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
 - (void)renderRows:(NSArray<NSDictionary *> *)rows in:(OCResults *)result
         emptyTitle:(NSString *)title detail:(NSString *)detail announce:(BOOL)announce {
     NSNumber *previous = [self selectedIn:result][@"id"];
+    BOOL selectedWasVisible = previous && NSIntersectsRect([result rowFrame:result.selected],result.visibleRect);
     [result replaceRowsPreservingSelection:rows];
     NSInteger index = result.selected;
-    if (self.revealed && ![previous isEqual:(index < 0 ? nil : rows[(NSUInteger)index][@"id"])]) {
-        [self clearPreview];
-    }
     [result showEmptyTitle:title detail:detail announce:announce];
     [result layoutRows];
-    if (index >= 0 && ![previous isEqual:rows[(NSUInteger)index][@"id"]])
-        [result scrollRectToVisible:[result rowFrame:index]];
+    if (index >= 0 && (selectedWasVisible || ![previous isEqual:rows[(NSUInteger)index][@"id"]]))
+        [result scrollRowToVisible:index];
     NSAccessibilityPostNotification(result, NSAccessibilityLayoutChangedNotification);
 }
 
@@ -830,7 +818,7 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
     self.tabs.selectedID = self.activeTab;
     NSString *name = [self collectionRowForID:self.activeTab][@"title"];
     self.search.placeholderString = self.activeTab && name
-        ? [NSString stringWithFormat:@"Cari di %@",name] : @"Cari klip";
+        ? [NSString stringWithFormat:OCText(@"Cari di %@", @"Search in %@"),name] : OCText(@"Cari klip", @"Search clips");
 }
 
 - (void)selectTab:(int64_t)collectionID {
@@ -876,15 +864,15 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
     if (action == OCResultExtendSelection) [canvas extendSelectionTo:index];
     else if (action == OCResultToggleSelection) [canvas toggleSelectionAt:index];
     else canvas.selected = index;
-    [canvas scrollRectToVisible:[canvas rowFrame:index]];
+    [canvas scrollRowToVisible:index];
     if (action == OCResultConfirm) [self useSelected:OCPaste];
 }
 
 - (NSButton *)makeUndoButtonIn:(NSView *)view right:(CGFloat)right y:(CGFloat)y {
-    NSButton *button = [NSButton buttonWithTitle:@"Urungkan" target:self action:@selector(undoDelete:)];
+    NSButton *button = [NSButton buttonWithTitle:OCText(@"Urungkan", @"Undo") target:self action:@selector(undoDelete:)];
     button.frame = NSMakeRect(right-88,y,88,24);
     button.controlSize = NSControlSizeSmall;
-    button.toolTip = @"Pulihkan klip yang baru dihapus (⌘Z saat fokus di hasil)";
+    button.toolTip = OCText(@"Pulihkan klip yang baru dihapus (⌘Z saat fokus di hasil)", @"Restore deleted clips (⌘Z when results are focused)");
     [view addSubview:button];
     return button;
 }
@@ -946,7 +934,7 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
 - (void)undoDelete:(id)sender {
     if (!self.undoTicket || self.undoPending) return;
     self.undoPending = OCSend(@{@"action":@"undo_delete",@"ticket":@(self.undoTicket)});
-    if (!self.undoPending) [self setWarning:@"Riwayat sedang sibuk. Coba lagi."];
+    if (!self.undoPending) [self setWarning:OCText(@"Riwayat sedang sibuk. Coba lagi.", @"History is busy. Try again.")];
     [self refreshUndoControls];
 }
 
@@ -972,7 +960,10 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
 - (void)presentStatus:(NSString *)message warning:(BOOL)warning announce:(BOOL)announce {
     NSTextField *label = self.status;
     if (!label) return;
-    NSString *text = message.length ? message : self.undoMessage ?: @"";
+    NSString *undoMessage = self.undoTicket
+        ? [NSString stringWithFormat:OCText(@"%lu klip dihapus.", @"Deleted %lu."), (unsigned long)self.undoCount]
+        : @"";
+    NSString *text = message.length ? message : undoMessage;
     warning = warning && text.length;
     if (warning) {
         NSTextAttachment *attachment = [NSTextAttachment new];
@@ -993,7 +984,7 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
         label.textColor = NSColor.secondaryLabelColor;
         label.stringValue = text;
     }
-    label.accessibilityLabel = warning ? [@"Peringatan: " stringByAppendingString:text] : nil;
+    label.accessibilityLabel = warning ? [OCText(@"Peringatan: ", @"Warning: ") stringByAppendingString:text] : nil;
     if (announce && warning) {
         NSAccessibilityPostNotificationWithUserInfo(label,NSAccessibilityAnnouncementRequestedNotification,
             @{NSAccessibilityAnnouncementKey:text,NSAccessibilityPriorityKey:@(NSAccessibilityPriorityHigh)});
@@ -1002,7 +993,7 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
 }
 
 - (void)sendAction:(NSDictionary *)request {
-    if (!OCSend(request)) [self setWarning:@"Riwayat sedang sibuk. Coba lagi."];
+    if (!OCSend(request)) [self setWarning:OCText(@"Riwayat sedang sibuk. Coba lagi.", @"History is busy. Try again.")];
 }
 
 - (void)loadVisibleImages {
@@ -1046,18 +1037,12 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
 }
 
 - (void)prepareDragForRows:(NSArray<NSDictionary *> *)rows {
-    for (NSDictionary *row in rows) {
-        if ([row[@"sensitive"] boolValue]) {
-            [self setWarning:@"Item sensitif tidak dapat diseret."];
-            return;
-        }
-    }
     NSMutableDictionary<NSNumber *, NSNumber *> *clips = [NSMutableDictionary dictionary];
     for (NSDictionary *row in rows) {
         NSNumber *ticket = @(++self.nextPayloadTicket);
         NSNumber *identifier = row[@"id"];
         if (!OCSend(@{@"action":@"payload",@"id":identifier,@"ticket":ticket})) {
-            [self setWarning:@"Riwayat sedang sibuk. Coba lagi."];
+            [self setWarning:OCText(@"Riwayat sedang sibuk. Coba lagi.", @"History is busy. Try again.")];
             return;
         }
         clips[ticket] = identifier;
@@ -1078,10 +1063,6 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
     if (!row || canvas.actionsSuspended) return;
     int64_t identifier = [row[@"id"] longLongValue];
     if (mode == OCPaste) {
-        if ([row[@"sensitive"] boolValue] && self.revealed != identifier) {
-            [self setWarning:@"Tekan Spasi untuk membuka item sensitif."];
-            return;
-        }
         // Without permission to post key events the clip is only copied, so any origin works.
         if (CGPreflightPostEventAccess() && ![self canPasteToOrigin]) return;
     }
@@ -1089,18 +1070,18 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
     uint64_t ticket = self.payloadTicket = ++self.nextPayloadTicket;
     if (!OCSend(@{@"action":@"payload",@"id":@(identifier),@"ticket":@(ticket)})) {
         self.payloadMode = OCIdle;
-        [self setWarning:@"Riwayat sedang sibuk. Coba lagi."];
+        [self setWarning:OCText(@"Riwayat sedang sibuk. Coba lagi.", @"History is busy. Try again.")];
     }
 }
 
 - (void)receivePayload:(NSArray<NSDictionary *> *)parts ticket:(uint64_t)ticket
-                    id:(int64_t)clip sensitive:(BOOL)sensitive {
+                    id:(int64_t)clip {
     NSNumber *dragTicket = @(ticket);
     if ([self.dragClips[dragTicket] isEqual:@(clip)]) {
-        NSArray<NSPasteboardItem *> *items = sensitive ? nil : OCPasteboardItems(parts);
+        NSArray<NSPasteboardItem *> *items = OCPasteboardItems(parts);
         if (!items.count) {
             [self clearPendingDrag];
-            [self setWarning:sensitive ? @"Item sensitif tidak dapat diseret." : @"Klip gagal disiapkan untuk diseret."];
+            [self setWarning:OCText(@"Klip gagal disiapkan untuk diseret.", @"Could not prepare the clip for dragging.")];
             return;
         }
         self.dragItems[dragTicket] = items;
@@ -1118,16 +1099,15 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
     OCPayloadMode mode = self.payloadMode;
     self.payloadMode = OCIdle;
     if (mode == OCPaste) {
-        if (sensitive && self.revealed != clip) return;
         BOOL direct = CGPreflightPostEventAccess();
         if (direct && ![self canPasteToOrigin]) return;
         NSInteger version;
         if (self.prepareClipboardWrite && !self.prepareClipboardWrite()) {
-            [self setWarning:@"Clipboard sedang direkam. Coba tempel lagi sebentar."];
+            [self setWarning:OCText(@"Clipboard sedang direkam. Coba tempel lagi sebentar.", @"The clipboard is being captured. Try pasting again in a moment.")];
             return;
         }
-        if (!OCWriteClipboard(parts,sensitive,&version)) {
-            [self setWarning:@"Klip gagal disiapkan untuk ditempel."];
+        if (!OCWriteClipboard(parts,&version)) {
+            [self setWarning:OCText(@"Klip gagal disiapkan untuk ditempel.", @"Could not prepare the clip for pasting.")];
             return;
         }
         NSRunningApplication *destination = self.origin;
@@ -1135,8 +1115,8 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
         [self dismissRestoringFocus:YES animate:!direct];
         if (!direct) {
             // No permission to send ⌘V: the clip is on the clipboard, so tell the user to paste it.
-            [self showToast:OCAccessibilityReady() ? @"Disalin. Tekan ⌘V untuk menempel."
-                : @"Disalin. Tekan ⌘V. Aktifkan Accessibility untuk tempel otomatis." onScreen:screen];
+            [self showToast:OCAccessibilityReady() ? OCText(@"Disalin. Tekan ⌘V untuk menempel.", @"Copied. Press ⌘V to paste.")
+                : OCText(@"Disalin. Tekan ⌘V. Aktifkan Accessibility untuk tempel otomatis.", @"Copied. Press ⌘V. Enable Accessibility to paste automatically.") onScreen:screen];
             return;
         }
         uint64_t token = self.panelToken;
@@ -1146,7 +1126,7 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
         });
         return;
     }
-    [self showPreview:parts sensitive:sensitive id:clip];
+    [self showPreview:parts];
 }
 
 - (void)showToast:(NSString *)text onScreen:(NSScreen *)preferred {
@@ -1160,7 +1140,7 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
     NSPanel *toast = [[NSPanel alloc] initWithContentRect:frame
         styleMask:NSWindowStyleMaskBorderless | NSWindowStyleMaskNonactivatingPanel
         backing:NSBackingStoreBuffered defer:NO];
-    toast.title = @"Pemberitahuan OpenClipboard";
+    toast.title = OCText(@"Pemberitahuan OpenClipboard", @"OpenClipboard Notification");
     toast.releasedWhenClosed = NO;
     toast.hidesOnDeactivate = NO;
     toast.floatingPanel = YES;
@@ -1212,12 +1192,12 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
     pid_t own = NSProcessInfo.processInfo.processIdentifier;
     NSRunningApplication *origin = self.origin;
     if (!origin || origin.terminated || origin.processIdentifier == own) {
-        [self setWarning:@"Buka panel dari aplikasi tujuan tempel."];
+        [self setWarning:OCText(@"Buka panel dari aplikasi tujuan tempel.", @"Open the panel from the app you want to paste into.")];
         return NO;
     }
     pid_t front = NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier;
     if (front == origin.processIdentifier || front == own) return YES;
-    [self setWarning:@"Aplikasi tujuan sudah berganti."];
+    [self setWarning:OCText(@"Aplikasi tujuan sudah berganti.", @"The destination app has changed.")];
     return NO;
 }
 
@@ -1234,11 +1214,11 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
             [self pasteTo:destination clip:clip version:version token:token retries:retries-1];
         });
     } else {
-        [self showToast:@"Tempel otomatis gagal. Periksa clipboard sebelum menempel." onScreen:nil];
+        [self showToast:OCText(@"Tempel otomatis gagal. Periksa clipboard sebelum menempel.", @"Auto-paste failed. Check the clipboard before pasting.") onScreen:nil];
     }
 }
 
-- (void)showPreview:(NSArray<NSDictionary *> *)parts sensitive:(BOOL)sensitive id:(int64_t)clip {
+- (void)showPreview:(NSArray<NSDictionary *> *)parts {
     [self clearPreview];
     NSRect available = (self.activePanel.screen ?: NSScreen.mainScreen).visibleFrame;
     NSSize size = NSMakeSize(floor(MIN(640, NSWidth(available) * 0.72)),
@@ -1247,7 +1227,7 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
     NSViewController *controller = [NSViewController new];
     NSView *view = [[NSView alloc] initWithFrame:NSMakeRect(0,0,size.width,size.height)];
     controller.view = view;
-    NSTextField *title = OCLabel(sensitive ? @"Item sensitif" : @"Pratinjau",13,NSFontWeightSemibold);
+    NSTextField *title = OCLabel(OCText(@"Pratinjau", @"Preview"),13,NSFontWeightSemibold);
     title.frame = NSMakeRect(NSMinX(body),size.height-29,NSWidth(body),19);
     [view addSubview:title];
 
@@ -1270,6 +1250,15 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
         preview.imageScaling = NSImageScaleProportionallyUpOrDown;
         [view addSubview:preview];
     } else {
+        if (text) {
+            NSTextField *count = OCLabel(OCCharacterCountLabel(OCCharacterCount(text)),12,NSFontWeightRegular);
+            count.textColor = NSColor.secondaryLabelColor;
+            count.alignment = NSTextAlignmentRight;
+            CGFloat halfWidth = floor(NSWidth(body)/2);
+            title.frame = NSMakeRect(NSMinX(body),size.height-29,halfWidth,19);
+            count.frame = NSMakeRect(NSMinX(body)+halfWidth,size.height-29,NSWidth(body)-halfWidth,19);
+            [view addSubview:count];
+        }
         NSScrollView *scroll = [NSTextView scrollableTextView];
         scroll.frame = body;
         scroll.autohidesScrollers = YES;
@@ -1296,10 +1285,6 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
     self.preview.delegate = self;
     self.preview.contentViewController = controller;
     self.preview.contentSize = size;
-    if (sensitive) {
-        self.revealed = clip;
-        [self setMessage:@"Item sensitif terbuka. Enter menempelkan klip."];
-    }
     OCResults *results = self.activeResults;
     NSRect clipRect = [results rowFrame:results.selected];
     if (!NSIntersectsRect(clipRect, results.visibleRect)) [results scrollRectToVisible:clipRect];
@@ -1309,13 +1294,8 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
 }
 
 - (void)clearPreview {
-    if (self.revealed) {
-        self.preview.animates = NO;
-        [self setMessage:self.recordingStatus];
-    }
     self.payloadTicket++;
     self.payloadMode = OCIdle;
-    self.revealed = 0;
     self.preview.delegate = nil;
     [self.preview close];
     self.preview = nil;
@@ -1488,37 +1468,51 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
 }
 
 - (void)actions:(NSButton *)sender {
-    NSMenu *menu = [[NSMenu alloc] initWithTitle:@"Tindakan"];
+    NSMenu *menu = [[NSMenu alloc] initWithTitle:OCText(@"Tindakan", @"Actions")];
     for (NSInteger i = 0; i < self.tabs.tabCount; i++) {
-        NSString *title = i == 0 ? @"Riwayat" : self.collections[(NSUInteger)i-1][@"name"];
+        NSString *title = i == 0 ? OCText(@"Riwayat", @"History") : self.collections[(NSUInteger)i-1][@"name"];
         NSMenuItem *tab = [self item:title action:@selector(navigateMenu:) value:@(i)];
         if (i < 9) tab.keyEquivalent = [NSString stringWithFormat:@"%ld",(long)i+1];
         tab.state = i == self.tabs.selectedIndex ? NSControlStateValueOn : NSControlStateValueOff;
         [menu addItem:tab];
     }
-    [menu addItem:NSMenuItem.separatorItem];
-    [menu addItem:[self item:@"Pengaturan…" action:@selector(settings:) value:nil]];
-    if (!OCAccessibilityReady()) {
-        [menu addItem:[self item:@"Panduan Accessibility…" action:@selector(accessibilityGuide:) value:nil]];
-    }
-    OCResults *results = self.activeResults;
-    NSDictionary *row = [self selectedIn:results];
-    [menu addItem:[self item:@"Tambah koleksi…" action:@selector(createCollection:) value:nil]];
+    [menu addItem:[self item:OCText(@"Tambah koleksi…", @"Add Collection…") action:@selector(createCollection:) value:nil]];
     NSDictionary *activeCollection = [self collectionRowForID:self.activeTab];
-    if (activeCollection) [self addCollectionActionsFor:activeCollection toMenu:menu];
+    if (activeCollection) {
+        NSString *title = OCText(@"Tindakan koleksi", @"Collection Actions");
+        NSMenuItem *collectionActions = [[NSMenuItem alloc] initWithTitle:title action:nil keyEquivalent:@""];
+        collectionActions.submenu = [[NSMenu alloc] initWithTitle:title];
+        [self addCollectionActionsFor:activeCollection toMenu:collectionActions.submenu];
+        [menu addItem:collectionActions];
+    }
+
+    [menu addItem:NSMenuItem.separatorItem];
+    NSDictionary *row = [self selectedIn:self.activeResults];
     if (row) {
-        NSMenuItem *clipActions = [[NSMenuItem alloc] initWithTitle:@"Tindakan klip" action:nil keyEquivalent:@""];
+        NSMenuItem *clipActions = [[NSMenuItem alloc] initWithTitle:OCText(@"Tindakan klip", @"Clip Actions") action:nil keyEquivalent:@""];
         clipActions.submenu = [self contextFor:row];
         [menu addItem:clipActions];
     }
+    [menu addItem:[self item:OCText(@"Bersihkan riwayat…", @"Clear History…") action:@selector(clearHistory:) value:nil]];
+
     [menu addItem:NSMenuItem.separatorItem];
-    [menu addItem:[self item:@"Bersihkan riwayat…" action:@selector(clearHistory:) value:nil]];
+    [menu addItem:[self item:OCText(@"Pengaturan…", @"Settings…") action:@selector(settings:) value:nil]];
+    [menu addItem:[self item:OCText(@"Tentang OpenClipboard", @"About OpenClipboard") action:@selector(showAbout:) value:nil]];
     [menu addItem:NSMenuItem.separatorItem];
-    [menu addItem:[self item:@"Keluar" action:@selector(quitApp:) value:nil]];
+    [menu addItem:[self item:OCText(@"Keluar", @"Quit") action:@selector(quitApp:) value:nil]];
     [menu popUpMenuPositioningItem:nil atLocation:NSMakePoint(0,0) inView:sender];
 }
 
 - (void)settings:(id)sender { if (self.openSettings) self.openSettings(); }
+- (void)showAbout:(id)sender {
+    [self dismissRestoringFocus:NO];
+    if (@available(macOS 14.0, *)) {
+        [NSApp activate];
+    } else {
+        [NSApp activateIgnoringOtherApps:YES];
+    }
+    [NSApp orderFrontStandardAboutPanel:sender];
+}
 - (void)quitApp:(id)sender {
     [self dismissRestoringFocus:NO];
     if (self.quit) self.quit();
@@ -1528,7 +1522,6 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
     OCConfirmClearHistory(self.activePanel,NO,^{ [self sendAction:@{@"action":@"clear",@"all":@NO}]; });
 }
 - (void)navigateMenu:(NSMenuItem *)sender { [self selectTabAtIndex:[sender.representedObject integerValue]]; }
-- (void)accessibilityGuide:(id)sender { if (self.openAccessibilityGuide) self.openAccessibilityGuide(); }
 
 - (void)createCollection:(id)sender {
     [self clearPreview];
@@ -1546,11 +1539,11 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
     if (!collection || !panel || panel.attachedSheet) return;
     NSAlert *alert = [NSAlert new];
     alert.alertStyle = NSAlertStyleWarning;
-    alert.messageText = @"Hapus koleksi?";
-    alert.informativeText = [NSString stringWithFormat:@"Klip dari “%@” tetap ada di Riwayat.", collection[@"title"]];
-    NSButton *cancel = [alert addButtonWithTitle:@"Batal"];
+    alert.messageText = OCText(@"Hapus koleksi?", @"Delete collection?");
+    alert.informativeText = [NSString stringWithFormat:OCText(@"Klip dari “%@” tetap ada di Riwayat.", @"Clips from “%@” are kept in History."), collection[@"title"]];
+    NSButton *cancel = [alert addButtonWithTitle:OCText(@"Batal", @"Cancel")];
     cancel.keyEquivalent = @"\e";
-    [alert addButtonWithTitle:@"Hapus koleksi"].hasDestructiveAction = YES;
+    [alert addButtonWithTitle:OCText(@"Hapus koleksi", @"Delete Collection")].hasDestructiveAction = YES;
     [alert beginSheetModalForWindow:panel completionHandler:^(NSModalResponse response) {
         if (response == NSAlertSecondButtonReturn) {
             if ([collection[@"id"] longLongValue] == self.activeTab) [self selectTab:0];
@@ -1560,11 +1553,11 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
 }
 
 - (void)addCollectionActionsFor:(NSDictionary *)row toMenu:(NSMenu *)menu {
-    [menu addItem:[self item:@"Ubah nama…" action:@selector(renameCollection:) value:row]];
-    NSMenu *colors = [[NSMenu alloc] initWithTitle:@"Warna"];
+    [menu addItem:[self item:OCText(@"Ubah nama…", @"Rename…") action:@selector(renameCollection:) value:row]];
+    NSMenu *colors = [[NSMenu alloc] initWithTitle:OCText(@"Warna", @"Color")];
     NSNumber *identifier = row[@"id"];
     NSString *current = row[@"color"] ?: @"";
-    NSMutableArray<NSDictionary *> *choices = [NSMutableArray arrayWithObject:@{@"key":@"",@"title":@"Otomatis"}];
+    NSMutableArray<NSDictionary *> *choices = [NSMutableArray arrayWithObject:@{@"key":@"",@"title":OCText(@"Otomatis", @"Automatic")}];
     [choices addObjectsFromArray:OCTabPalette()];
     for (NSDictionary *choice in choices) {
         NSMenuItem *item = [self item:choice[@"title"] action:@selector(runMenuAction:)
@@ -1573,27 +1566,27 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
         item.state = [choice[@"key"] isEqualToString:current] ? NSControlStateValueOn : NSControlStateValueOff;
         [colors addItem:item];
     }
-    NSMenuItem *colorItem = [[NSMenuItem alloc] initWithTitle:@"Warna" action:nil keyEquivalent:@""];
+    NSMenuItem *colorItem = [[NSMenuItem alloc] initWithTitle:OCText(@"Warna", @"Color") action:nil keyEquivalent:@""];
     colorItem.submenu = colors;
     [menu addItem:colorItem];
-    [menu addItem:[self item:@"Hapus koleksi…" action:@selector(deleteCollection:) value:row]];
+    [menu addItem:[self item:OCText(@"Hapus koleksi…", @"Delete Collection…") action:@selector(deleteCollection:) value:row]];
 }
 
 - (NSMenu *)contextFor:(NSDictionary *)row {
     if ([row[@"kind"] isEqualToString:@"koleksi"]) {
-        NSMenu *menu = [[NSMenu alloc] initWithTitle:@"Tindakan koleksi"];
+        NSMenu *menu = [[NSMenu alloc] initWithTitle:OCText(@"Tindakan koleksi", @"Collection Actions")];
         [self addCollectionActionsFor:row toMenu:menu];
         return menu;
     }
     NSNumber *identifier = row[@"id"];
-    NSMenu *menu = [[NSMenu alloc] initWithTitle:@"Tindakan klip"];
+    NSMenu *menu = [[NSMenu alloc] initWithTitle:OCText(@"Tindakan klip", @"Clip Actions")];
     BOOL pinned = [row[@"pinned"] boolValue];
-    [menu addItem:[self item:pinned ? @"Lepas sematan" : @"Sematkan"
+    [menu addItem:[self item:pinned ? OCText(@"Lepas sematan", @"Unpin") : OCText(@"Sematkan", @"Pin")
         action:@selector(runMenuAction:) value:@{@"action":@"pin",@"id":identifier,@"pinned":(pinned ? @NO : @YES)}]];
-    [menu addItem:[self item:@"Pratinjau" action:@selector(previewMenu:) value:nil]];
+    [menu addItem:[self item:OCText(@"Pratinjau", @"Preview") action:@selector(previewMenu:) value:nil]];
 
     if (self.collections.count) {
-        NSMenu *collections = [[NSMenu alloc] initWithTitle:@"Koleksi"];
+        NSMenu *collections = [[NSMenu alloc] initWithTitle:OCText(@"Koleksi", @"Collections")];
         for (NSDictionary *collection in self.collections) {
             NSNumber *collectionID = collection[@"id"];
             BOOL member = [row[@"collections"] containsObject:collectionID];
@@ -1603,20 +1596,13 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
             choice.state = member ? NSControlStateValueOn : NSControlStateValueOff;
             [collections addItem:choice];
         }
-        NSMenuItem *assigned = [[NSMenuItem alloc] initWithTitle:@"Tambahkan ke koleksi" action:nil keyEquivalent:@""];
+        NSMenuItem *assigned = [[NSMenuItem alloc] initWithTitle:OCText(@"Tambahkan ke koleksi", @"Add to Collection") action:nil keyEquivalent:@""];
         assigned.submenu = collections;
         [menu addItem:assigned];
     }
     if (self.activeTab) {
-        [menu addItem:[self item:@"Keluarkan dari koleksi" action:@selector(runMenuAction:)
+        [menu addItem:[self item:OCText(@"Keluarkan dari koleksi", @"Remove from Collection") action:@selector(runMenuAction:)
             value:@{@"action":@"membership",@"id":identifier,@"collection":@(self.activeTab),@"add":@NO}]];
-    }
-    if ([row[@"manually_sensitive"] boolValue]) {
-        [menu addItem:[self item:@"Lepas tanda sensitif" action:@selector(runMenuAction:)
-            value:@{@"action":@"unmark_sensitive",@"id":identifier}]];
-    } else if (![row[@"sensitive"] boolValue]) {
-        [menu addItem:[self item:@"Tandai sensitif" action:@selector(runMenuAction:)
-            value:@{@"action":@"mark_sensitive",@"id":identifier}]];
     }
     return menu;
 }
