@@ -4,6 +4,7 @@
 #import <ApplicationServices/ApplicationServices.h>
 #import <CoreServices/CoreServices.h>
 #import <ServiceManagement/ServiceManagement.h>
+#import <QuartzCore/QuartzCore.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
 static NSString *ShortcutHelp(void) { return OCText(@"Buka riwayat dari aplikasi yang sedang dipakai.", @"Open history from any app."); }
@@ -51,8 +52,13 @@ void OCConfirmClearHistory(NSWindow *window, BOOL all, dispatch_block_t confirm)
     }];
 }
 
+static NSString *const ReleasesURL = @"https://github.com/ryan-prayoga/OpenClipboard/releases/latest";
+
 @interface OCApplication : NSObject <NSApplicationDelegate, NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate>
 @property(nonatomic, strong) NSWindow *settings;
+@property(nonatomic, strong) NSButton *checkUpdateButton;
+@property(nonatomic) BOOL checkingRelease;
+@property(nonatomic) CGFloat settingsTargetHeight;
 @property(nonatomic, strong) NSTabView *settingsPages;
 @property(nonatomic, copy) NSArray<NSButton *> *settingsNavigation;
 @property(nonatomic, strong) OCPicker *picker;
@@ -64,12 +70,14 @@ void OCConfirmClearHistory(NSWindow *window, BOOL all, dispatch_block_t confirm)
 @property(nonatomic, copy) NSArray<NSButton *> *modeButtons;
 @property(nonatomic, strong) NSButton *loginButton;
 @property(nonatomic, strong) NSTextField *loginStatus;
+@property(nonatomic, strong) NSButton *loginSettingsButton;
 @property(nonatomic, strong) NSTextField *historyStatus;
 @property(nonatomic, strong) NSTextField *historyFeedback;
 @property(nonatomic, strong) NSButton *retryButton;
 @property(nonatomic, strong) NSView *historyRetentionContainer;
 @property(nonatomic, strong) NSPopUpButton *historyRetention;
 @property(nonatomic, strong) NSTextField *clipboardPermission;
+@property(nonatomic, strong) NSButton *privacySettingsButton;
 @property(nonatomic, strong) NSTextField *caretPermission;
 @property(nonatomic, strong) NSButton *guideButton;
 @property(nonatomic, strong) NSTableView *excludedTable;
@@ -136,7 +144,7 @@ static NSTextField *PlaceLabel(NSView *view, NSString *title, NSRect rect, BOOL 
 @implementation OCSettingsGroup
 - (void)drawRect:(NSRect)dirtyRect {
     NSRect surface = NSInsetRect(self.bounds,0.5,0.5);
-    NSBezierPath *shape = [NSBezierPath bezierPathWithRoundedRect:surface xRadius:14 yRadius:14];
+    NSBezierPath *shape = [NSBezierPath bezierPathWithRoundedRect:surface xRadius:12 yRadius:12];
     [[NSColor.labelColor colorWithAlphaComponent:0.045] setFill];
     [shape fill];
     [[NSColor.labelColor colorWithAlphaComponent:0.075] setStroke];
@@ -178,7 +186,7 @@ static void FillPreviewShape(NSRect rect, CGFloat radius, NSColor *color) {
     NSColor *panel = [NSColor.labelColor colorWithAlphaComponent:0.12];
     NSColor *selection = [NSColor.controlAccentColor colorWithAlphaComponent:0.38];
     CGFloat middle = NSMidX(screen);
-    CGFloat firstLineY = NSHeight(self.bounds)-9;
+    CGFloat firstLineY = NSHeight(self.bounds)-15;
     for (NSInteger row = 0; row < 2; row++) {
         FillPreviewShape(NSMakeRect(middle-48,firstLineY-row*8,70-row*17,2),1,line);
     }
@@ -190,7 +198,7 @@ static void FillPreviewShape(NSRect rect, CGFloat radius, NSColor *color) {
             FillPreviewShape(NSMakeRect(13+card*(cardWidth+4),12,cardWidth,17),3,card == 0 ? selection : line);
         }
     } else {
-        FillPreviewShape(NSMakeRect(middle+7,firstLineY-11,1.5,8),0.75,NSColor.controlAccentColor);
+        FillPreviewShape(NSMakeRect(middle+7,35,1.5,firstLineY-38),0.75,NSColor.controlAccentColor);
         FillPreviewShape(NSMakeRect(middle+7,7,67,27),5,panel);
         FillPreviewShape(NSMakeRect(middle+12,25,57,5),2,selection);
         FillPreviewShape(NSMakeRect(middle+12,18,41,3),1.5,line);
@@ -217,10 +225,30 @@ static void SettingsGroup(NSView *pane, CGFloat y, CGFloat height) {
     [pane addSubview:[[OCSettingsGroup alloc] initWithFrame:NSMakeRect(0,y,480,height)]];
 }
 
-static void SettingsTitle(NSView *pane, NSString *title) {
+static void SettingsDivider(NSView *pane, CGFloat y) {
+    NSBox *divider = [[NSBox alloc] initWithFrame:NSMakeRect(15,y,450,1)];
+    divider.boxType = NSBoxSeparator;
+    [pane addSubview:divider];
+}
+
+static void SettingsSectionLabel(NSView *pane, NSString *title, CGFloat y) {
+    NSTextField *label = OCLabel(title, 13, NSFontWeightSemibold);
+    label.frame = NSMakeRect(1,y,478,19);
+    [pane addSubview:label];
+}
+
+static const CGFloat SettingsHeight = 403;
+static const CGFloat ShortcutsExtraHeight = 120;
+static const NSInteger ShortcutsSection = 2;
+
+static void SettingsTitleAtOffset(NSView *pane, NSString *title, CGFloat offset) {
     NSTextField *heading = OCLabel(title, 27, NSFontWeightSemibold);
-    heading.frame = NSMakeRect(1,307,475,36);
+    heading.frame = NSMakeRect(1,307+offset,475,36);
     [pane addSubview:heading];
+}
+
+static void SettingsTitle(NSView *pane, NSString *title) {
+    SettingsTitleAtOffset(pane,title,0);
 }
 
 @implementation OCApplication
@@ -354,7 +382,7 @@ static void SettingsTitle(NSView *pane, NSString *title) {
 }
 
 - (void)buildSettings {
-    self.settings = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 712, 403)
+    self.settings = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 712, SettingsHeight)
         styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskFullSizeContentView
         backing:NSBackingStoreBuffered defer:NO];
     self.settings.identifier = OCSettingsWindowIdentifier;
@@ -362,6 +390,7 @@ static void SettingsTitle(NSView *pane, NSString *title) {
     self.settings.titlebarAppearsTransparent = YES;
     self.settings.releasedWhenClosed = NO;
     self.settings.delegate = self;
+    self.settingsTargetHeight = SettingsHeight;
     [self.settings center];
 
     [self buildSettingsContent];
@@ -372,26 +401,32 @@ static void SettingsTitle(NSView *pane, NSString *title) {
     self.settings.title = OCText(@"Pengaturan OpenClipboard", @"OpenClipboard Settings");
     NSView *root = [[NSView alloc] initWithFrame:self.settings.contentView.bounds];
     self.settings.contentView = root;
-    NSVisualEffectView *rail = [[NSVisualEffectView alloc] initWithFrame:NSMakeRect(0,0,179,403)];
+    CGFloat height = NSHeight(root.bounds);
+    CGFloat topOffset = height - SettingsHeight;
+    NSVisualEffectView *rail = [[NSVisualEffectView alloc] initWithFrame:NSMakeRect(0,0,179,height)];
+    rail.autoresizingMask = NSViewHeightSizable;
     rail.material = NSVisualEffectMaterialSidebar;
     rail.blendingMode = NSVisualEffectBlendingModeWithinWindow;
-    rail.state = NSVisualEffectStateActive;
+    rail.state = NSVisualEffectStateFollowsWindowActiveState;
     [root addSubview:rail];
 
     NSImage *symbol = [NSImage imageWithSystemSymbolName:@"clipboard.fill" accessibilityDescription:nil];
     NSImageView *mark = [NSImageView imageViewWithImage:symbol];
     mark.contentTintColor = NSColor.controlAccentColor;
-    mark.frame = NSMakeRect(19,326,23,27);
+    mark.frame = NSMakeRect(19,326+topOffset,23,27);
+    mark.autoresizingMask = NSViewMinYMargin;
     [rail addSubview:mark];
     NSTextField *wordmark = OCLabel(@"OpenClipboard",14,NSFontWeightSemibold);
-    wordmark.frame = NSMakeRect(48,329,126,21);
+    wordmark.frame = NSMakeRect(48,329+topOffset,126,21);
+    wordmark.autoresizingMask = NSViewMinYMargin;
     [rail addSubview:wordmark];
 
-    self.settingsPages = [[NSTabView alloc] initWithFrame:NSMakeRect(205,22,480,350)];
+    self.settingsPages = [[NSTabView alloc] initWithFrame:NSMakeRect(205,22,480,350+topOffset)];
+    self.settingsPages.autoresizingMask = NSViewHeightSizable;
     self.settingsPages.tabViewType = NSNoTabsNoBorder;
     [root addSubview:self.settingsPages];
-    NSArray *sections = @[OCText(@"Umum", @"General"), OCText(@"Riwayat", @"History"), OCText(@"Privasi", @"Privacy")];
-    NSArray *icons = @[@"slider.horizontal.3", @"clock.arrow.circlepath", @"lock.shield"];
+    NSArray *sections = @[OCText(@"Umum", @"General"), OCText(@"Tampilan", @"Appearance"), OCText(@"Pintasan", @"Shortcuts"), OCText(@"Riwayat", @"History"), OCText(@"Privasi", @"Privacy")];
+    NSArray *icons = @[@"gearshape", @"macwindow", @"keyboard", @"clock.arrow.circlepath", @"lock.shield"];
     NSMutableArray *navigation = [NSMutableArray array];
     for (NSUInteger i=0; i<sections.count; i++) {
         NSTabViewItem *item = [[NSTabViewItem alloc] initWithIdentifier:@(i)];
@@ -399,8 +434,10 @@ static void SettingsTitle(NSView *pane, NSString *title) {
         item.view = [[NSView alloc] initWithFrame:NSMakeRect(0,0,480,350)];
         [self.settingsPages addTabViewItem:item];
         if (i==0) [self buildGeneral:item.view];
-        if (i==1) [self buildHistory:item.view];
-        if (i==2) [self buildPrivacy:item.view];
+        if (i==1) [self buildAppearance:item.view];
+        if (i==ShortcutsSection) [self buildShortcuts:item.view];
+        if (i==3) [self buildHistory:item.view];
+        if (i==4) [self buildPrivacy:item.view];
 
         NSImage *image = [NSImage imageWithSystemSymbolName:icons[i] accessibilityDescription:nil];
         NSButton *button = [OCSettingsNavButton buttonWithTitle:sections[i] image:image target:self
@@ -411,7 +448,8 @@ static void SettingsTitle(NSView *pane, NSString *title) {
         button.imagePosition = NSImageLeading;
         button.alignment = NSTextAlignmentLeft;
         button.font = [NSFont systemFontOfSize:13 weight:NSFontWeightMedium];
-        button.frame = NSMakeRect(12,275-i*42,155,36);
+        button.frame = NSMakeRect(12,275+topOffset-i*37,155,34);
+        button.autoresizingMask = NSViewMinYMargin;
         [rail addSubview:button];
         [navigation addObject:button];
     }
@@ -432,7 +470,44 @@ static void SettingsTitle(NSView *pane, NSString *title) {
 }
 
 - (void)showSettingsSection:(NSButton *)sender {
-    [self.settingsPages selectTabViewItemAtIndex:sender.tag];
+    NSTabViewItem *item = [self.settingsPages tabViewItemAtIndex:sender.tag];
+    BOOL changing = self.settingsPages.selectedTabViewItem != item;
+    BOOL animate = changing && self.settings.isVisible && NSApp.currentEvent.type != NSEventTypeKeyDown
+        && !NSWorkspace.sharedWorkspace.accessibilityDisplayShouldReduceMotion;
+    if (self.captureMonitor && changing) {
+        [self finishCapture];
+        self.shortcutFeedback.stringValue = self.shortcutID < 0
+            ? OCText(@"Pintasan belum aktif. Pilih kombinasi lain.", @"The shortcut is inactive. Choose another combination.")
+            : ShortcutHelp();
+    }
+    [self.settingsPages selectTabViewItem:item];
+    CGFloat height = SettingsHeight + (sender.tag == ShortcutsSection ? ShortcutsExtraHeight : 0);
+    NSRect frame = self.settings.frame;
+    if (self.settingsTargetHeight != height) {
+        self.settingsTargetHeight = height;
+        frame.origin.y = NSMaxY(frame) - height;
+        frame.size.height = height;
+        if (self.settings.screen) {
+            NSRect visible = self.settings.screen.visibleFrame;
+            frame.origin.y = MAX(NSMinY(visible), MIN(frame.origin.y, NSMaxY(visible) - height));
+        }
+        [NSAnimationContext runAnimationGroup:^(NSAnimationContext *context) {
+            context.duration = animate ? 0.19 : 0;
+            context.timingFunction = [CAMediaTimingFunction functionWithControlPoints:0.77 :0 :0.175 :1];
+            [self.settings.animator setFrame:frame display:YES];
+        } completionHandler:nil];
+    }
+    if (animate) {
+        item.view.wantsLayer = YES;
+        CABasicAnimation *fade = [CABasicAnimation animationWithKeyPath:@"opacity"];
+        fade.fromValue = @0.45;
+        fade.toValue = @1;
+        fade.duration = 0.18;
+        fade.timingFunction = [CAMediaTimingFunction functionWithControlPoints:0.23 :1 :0.32 :1];
+        [item.view.layer addAnimation:fade forKey:@"settingsPage"];
+    } else {
+        [item.view.layer removeAnimationForKey:@"settingsPage"];
+    }
     for (NSButton *button in self.settingsNavigation) {
         BOOL selected = button == sender;
         button.state = selected ? NSControlStateValueOn : NSControlStateValueOff;
@@ -443,40 +518,145 @@ static void SettingsTitle(NSView *pane, NSString *title) {
 
 - (void)buildGeneral:(NSView *)view {
     SettingsTitle(view, OCText(@"Umum", @"General"));
+    SettingsSectionLabel(view, OCText(@"Preferensi aplikasi", @"App preferences"), 279);
+    SettingsGroup(view,159,112);
+    SettingsDivider(view,224);
     NSString *language = OCText(@"Bahasa", @"Language");
-    PlaceLabel(view, language, NSMakeRect(246,314,78,20), NO);
-    NSPopUpButton *languagePicker = OCGlassPopup(NSMakeRect(326,306,154,34), view);
+    PlaceLabel(view, language, NSMakeRect(15,236,240,22), NO);
+    NSPopUpButton *languagePicker = OCGlassPopup(NSMakeRect(295,231,170,34), view);
     [languagePicker addItemsWithTitles:@[@"Bahasa Indonesia", @"English"]];
     [languagePicker selectItemAtIndex:OCUsesEnglish() ? 1 : 0];
     [languagePicker setAccessibilityLabel:language];
     languagePicker.target = self;
     languagePicker.action = @selector(changeLanguage:);
-    SettingsGroup(view,223,76);
-    SettingsGroup(view,77,135);
-    SettingsGroup(view,8,63);
 
-    PlaceLabel(view, OCText(@"Shortcut global", @"Global shortcut"), NSMakeRect(15,262,154,20), NO);
-    self.shortcutValue = PlaceLabel(view, @"", NSMakeRect(159,261,94,23), NO);
+    self.loginButton = [NSButton checkboxWithTitle:OCText(@"Jalankan saat login", @"Launch at login") target:self action:@selector(toggleLogin:)];
+    self.loginButton.frame = NSMakeRect(15,190,227,24);
+    [view addSubview:self.loginButton];
+    self.loginStatus = PlaceLabel(view, @"", NSMakeRect(33,169,232,19), YES);
+    self.loginSettingsButton = PlaceButton(view, OCText(@"Buka Pengaturan Login", @"Open Login Settings"), self, @selector(openLoginSettings:), NSMakeRect(261,176,204,32));
+
+    SettingsSectionLabel(view, OCText(@"Pembaruan aplikasi", @"App updates"), 122);
+    SettingsGroup(view,62,52);
+    NSString *version = [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleShortVersionString"] ?: @"—";
+    PlaceLabel(view, [NSString stringWithFormat:OCText(@"Versi %@", @"Version %@"), version], NSMakeRect(15,77,232,21), NO);
+    self.checkUpdateButton = PlaceButton(view, OCText(@"Periksa pembaruan…", @"Check for Updates…"), self,
+        @selector(checkForUpdates:), NSMakeRect(267,71,198,32));
+    self.checkUpdateButton.enabled = !self.checkingRelease;
+}
+
+- (void)checkForUpdates:(id)sender {
+    if (self.checkingRelease || self.settings.attachedSheet) return;
+    self.checkingRelease = YES;
+    self.checkUpdateButton.enabled = NO;
+    NSURL *url = [NSURL URLWithString:@"https://api.github.com/repos/ryan-prayoga/OpenClipboard/releases/latest"];
+    NSURLRequest *request = [NSURLRequest requestWithURL:url cachePolicy:NSURLRequestReloadIgnoringLocalCacheData timeoutInterval:15];
+    NSURLSessionDataTask *task = [NSURLSession.sharedSession dataTaskWithRequest:request
+        completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        id release = !error && [(NSHTTPURLResponse *)response statusCode] == 200 && data
+            ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+        id tag = [release isKindOfClass:NSDictionary.class] ? release[@"tag_name"] : nil;
+        NSString *version = [tag isKindOfClass:NSString.class] &&
+            [tag rangeOfString:@"^v[0-9]+\\.[0-9]+\\.[0-9]+$" options:NSRegularExpressionSearch].location != NSNotFound
+            ? [tag substringFromIndex:1] : nil;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            self.checkingRelease = NO;
+            self.checkUpdateButton.enabled = YES;
+            if (!self.settings.isVisible || self.settings.attachedSheet) return;
+            NSString *installed = [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleShortVersionString"];
+            BOOL newer = version && [version compare:installed options:NSNumericSearch] == NSOrderedDescending;
+            NSAlert *alert = [NSAlert new];
+            alert.messageText = !version ? OCText(@"Gagal memeriksa pembaruan", @"Could not check for updates")
+                : newer ? OCText(@"Pembaruan tersedia", @"Update available")
+                : OCText(@"Sudah memakai versi terbaru", @"You’re up to date");
+            if (version) alert.informativeText = [NSString stringWithFormat:OCText(@"Versi rilis terbaru %@", @"Latest release version %@"), version];
+            if (newer || !version) [alert addButtonWithTitle:OCText(@"Lihat rilis", @"View Releases")];
+            [alert addButtonWithTitle:OCText(@"Tutup", @"Close")];
+            [alert beginSheetModalForWindow:self.settings completionHandler:^(NSModalResponse result) {
+                if ((newer || !version) && result == NSAlertFirstButtonReturn)
+                    [NSWorkspace.sharedWorkspace openURL:[NSURL URLWithString:ReleasesURL]];
+            }];
+        });
+    }];
+    [task resume];
+}
+
+- (void)buildShortcuts:(NSView *)view {
+    CGFloat offset = ShortcutsExtraHeight;
+    SettingsTitleAtOffset(view, OCText(@"Pintasan", @"Shortcuts"), offset);
+    SettingsSectionLabel(view, OCText(@"Pintasan global", @"Global shortcut"), 279+offset);
+    SettingsGroup(view,203+offset,68);
+    PlaceLabel(view, OCText(@"Buka riwayat", @"Open history"), NSMakeRect(15,233+offset,125,21), NO);
+    self.shortcutValue = PlaceLabel(view, @"", NSMakeRect(145,232+offset,86,23), NO);
     self.shortcutValue.font = [NSFont monospacedSystemFontOfSize:15 weight:NSFontWeightSemibold];
-    self.shortcutCapture = PlaceButton(view, OCText(@"Ubah…", @"Change…"), self, @selector(captureShortcut:), NSMakeRect(244,254,86,32));
-    PlaceButton(view, OCText(@"Pulihkan bawaan", @"Restore Default"), self, @selector(resetShortcut:), NSMakeRect(336,254,130,32));
-    self.shortcutFeedback = PlaceLabel(view, ShortcutHelp(), NSMakeRect(15,233,450,18), YES);
+    self.shortcutCapture = PlaceButton(view, OCText(@"Ubah…", @"Change…"), self, @selector(captureShortcut:), NSMakeRect(233,227+offset,96,32));
+    PlaceButton(view, OCText(@"Pulihkan bawaan", @"Restore Default"), self, @selector(resetShortcut:), NSMakeRect(335,227+offset,130,32));
+    self.shortcutFeedback = PlaceLabel(view, ShortcutHelp(), NSMakeRect(15,208+offset,450,18), YES);
 
-    PlaceLabel(view, OCText(@"Tampilan clipboard", @"Clipboard layout"), NSMakeRect(18,185,192,20), NO).font =
-        [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold];
+    SettingsSectionLabel(view, OCText(@"Di panel clipboard", @"In the clipboard panel"), 287);
+    NSArray<NSArray<NSString *> *> *rows = @[
+        @[OCText(@"Mulai mencari", @"Start searching"), OCText(@"Ketik huruf", @"Type a letter")],
+        @[OCText(@"Pilih klip", @"Select clip"), @"↑ / ↓"],
+        @[OCText(@"Klip di panel bawah", @"Clip in bottom panel"), @"← / →"],
+        @[OCText(@"Perluas pilihan", @"Extend selection"), OCText(@"⇧ + panah", @"⇧ + arrow")],
+        @[OCText(@"Tempel klip", @"Paste clip"), @"↩ / Enter"],
+        @[OCText(@"Pratinjau klip", @"Toggle preview"), OCText(@"Spasi", @"Space")],
+        @[OCText(@"Menu tindakan klip", @"Clip actions menu"), @"⇧ F10"],
+        @[OCText(@"Hapus klip", @"Delete clips"), @"Delete"],
+        @[OCText(@"Urungkan hapus", @"Undo deletion"), @"⌘ Z"],
+        @[OCText(@"Pilih tab bernomor", @"Go to numbered tab"), @"⌘ 1–9"],
+        @[OCText(@"Pindah tab", @"Switch tabs"), OCText(@"⌘ + panah", @"⌘ + arrow")],
+        @[OCText(@"Hari di panel bawah", @"Day in bottom panel"), @"⌥ ← / →"],
+        @[OCText(@"Pindah fokus", @"Move focus"), @"Tab / ⇧ Tab"],
+        @[OCText(@"Tutup panel/pratinjau", @"Close panel/preview"), @"Esc"]
+    ];
+    const CGFloat rowHeight = 36;
+    const CGFloat bottom = 9;
+    const CGFloat verticalPadding = 7;
+    const CGFloat columnWidth = 234;
+    const NSUInteger rowsPerColumn = (rows.count + 1) / 2;
+    const CGFloat columnHeight = rowsPerColumn * rowHeight + 2 * verticalPadding;
+    for (NSUInteger column = 0; column < 2; column++) {
+        CGFloat x = column * (480 - columnWidth);
+        [view addSubview:[[OCSettingsGroup alloc] initWithFrame:NSMakeRect(x,bottom,columnWidth,columnHeight)]];
+    }
+
+    for (NSUInteger index = 0; index < rows.count; index++) {
+        NSArray<NSString *> *row = rows[index];
+        NSUInteger column = index / rowsPerColumn;
+        NSUInteger rowIndex = index % rowsPerColumn;
+        CGFloat x = column * (480 - columnWidth);
+        CGFloat y = bottom + columnHeight - verticalPadding - (rowIndex + 1) * rowHeight;
+        NSTextField *action = PlaceLabel(view, row[0], NSMakeRect(x+11,y+8,125,19), NO);
+        action.font = [NSFont systemFontOfSize:12];
+        NSTextField *keys = PlaceLabel(view, row[1], NSMakeRect(x+143,y+8,80,19), YES);
+        keys.font = action.font;
+        keys.alignment = NSTextAlignmentRight;
+        if (rowIndex + 1 < rowsPerColumn && index + 1 < rows.count) {
+            NSBox *divider = [[NSBox alloc] initWithFrame:NSMakeRect(x+11,y,columnWidth-22,1)];
+            divider.boxType = NSBoxSeparator;
+            [view addSubview:divider];
+        }
+    }
+}
+
+- (void)buildAppearance:(NSView *)view {
+    SettingsTitle(view, OCText(@"Tampilan", @"Appearance"));
+    SettingsSectionLabel(view, OCText(@"Posisi panel clipboard", @"Clipboard panel position"), 279);
+    SettingsGroup(view,136,135);
     BOOL bottomMode = [NSUserDefaults.standardUserDefaults boolForKey:BottomMode];
     NSMutableArray<NSButton *> *modeButtons = [NSMutableArray array];
     NSArray<NSString *> *titles = @[OCText(@"Dekat kursor teks", @"Near the text cursor"), OCText(@"Panel bawah layar", @"Bottom of the screen")];
     for (NSInteger mode = 0; mode < (NSInteger)titles.count; mode++) {
         CGFloat x = 18+mode*232;
         NSButton *button = [NSButton radioButtonWithTitle:titles[(NSUInteger)mode] target:self action:@selector(changeMode:)];
-        button.frame = NSMakeRect(x,161,212,21);
+        button.frame = NSMakeRect(x,147,212,21);
         button.tag = mode;
         button.state = mode == bottomMode ? NSControlStateValueOn : NSControlStateValueOff;
         [view addSubview:button];
         [modeButtons addObject:button];
 
-        OCModePreview *preview = [[OCModePreview alloc] initWithFrame:NSMakeRect(x,108,212,47)];
+        OCModePreview *preview = [[OCModePreview alloc] initWithFrame:NSMakeRect(x,175,212,80)];
         preview.bottom = mode == 1;
         preview.modeButton = button;
         [preview addGestureRecognizer:[[NSClickGestureRecognizer alloc] initWithTarget:preview action:@selector(selectMode:)]];
@@ -484,24 +664,21 @@ static void SettingsTitle(NSView *pane, NSString *title) {
     }
     self.modeButtons = modeButtons;
 
+    SettingsSectionLabel(view, OCText(@"Gaya panel", @"Panel style"), 98);
+    SettingsGroup(view,38,52);
     NSButton *glass = [NSButton checkboxWithTitle:OCText(@"Gunakan Liquid Glass", @"Use Liquid Glass") target:self
                                             action:@selector(toggleLiquidGlass:)];
-    glass.frame = NSMakeRect(18,82,210,22);
+    glass.frame = NSMakeRect(15,53,210,22);
     if (@available(macOS 26.0, *)) {
         glass.state = [NSUserDefaults.standardUserDefaults boolForKey:OCLiquidGlassPreference]
             ? NSControlStateValueOn : NSControlStateValueOff;
         glass.toolTip = OCText(@"Berlaku saat riwayat dibuka lagi.", @"Applies the next time you open history.");
     } else {
         glass.enabled = NO;
-        PlaceLabel(view, OCText(@"Perlu macOS 26 atau lebih baru.", @"Requires macOS 26 or later."), NSMakeRect(233,83,227,20), YES);
+        PlaceLabel(view, OCText(@"Perlu macOS 26 atau lebih baru.", @"Requires macOS 26 or later."), NSMakeRect(233,54,227,20), YES);
     }
     [view addSubview:glass];
 
-    self.loginButton = [NSButton checkboxWithTitle:OCText(@"Jalankan saat login", @"Launch at login") target:self action:@selector(toggleLogin:)];
-    self.loginButton.frame = NSMakeRect(15,38,227,24);
-    [view addSubview:self.loginButton];
-    self.loginStatus = PlaceLabel(view, @"", NSMakeRect(33,17,236,19), YES);
-    PlaceButton(view, OCText(@"Buka Pengaturan Login", @"Open Login Settings"), self, @selector(openLoginSettings:), NSMakeRect(261,24,202,30));
 }
 
 - (void)changeLanguage:(NSPopUpButton *)sender {
@@ -520,57 +697,51 @@ static void SettingsTitle(NSView *pane, NSString *title) {
 
 - (void)buildHistory:(NSView *)view {
     SettingsTitle(view, OCText(@"Riwayat", @"History"));
-    SettingsGroup(view,207,80);
-    SettingsGroup(view,125,66);
-    SettingsGroup(view,37,78);
+    SettingsSectionLabel(view, OCText(@"Penyimpanan", @"Storage"), 279);
+    SettingsGroup(view,132,139);
+    SettingsDivider(view,205);
 
-    self.historyStatus = PlaceLabel(view, @"", NSMakeRect(15,248,194,21), NO);
+    self.historyStatus = PlaceLabel(view, @"", NSMakeRect(15,239,340,21), NO);
     self.historyStatus.font = [NSFont systemFontOfSize:14 weight:NSFontWeightSemibold];
-    self.retryButton = PlaceButton(view, OCText(@"Coba lagi", @"Retry"), self, @selector(retryClipboard:), NSMakeRect(362,242,101,31));
-    self.historyFeedback = PlaceLabel(view, HistoryStorageNote(), NSMakeRect(15,218,446,22), YES);
+    self.retryButton = PlaceButton(view, OCText(@"Coba lagi", @"Retry"), self, @selector(retryClipboard:), NSMakeRect(362,220,103,31));
+    self.historyFeedback = PlaceLabel(view, HistoryStorageNote(), NSMakeRect(15,214,345,22), YES);
 
-    PlaceLabel(view, OCText(@"Durasi simpan klip biasa", @"Keep regular clips for"), NSMakeRect(15,159,235,21), NO);
+    PlaceLabel(view, OCText(@"Durasi simpan klip biasa", @"Keep regular clips for"), NSMakeRect(15,176,235,21), NO);
     [self buildHistoryRetention:view];
-    PlaceLabel(view, OCText(@"Klip sematan dan klip di koleksi tetap disimpan.", @"Pinned clips and clips in collections are kept."), NSMakeRect(15,133,448,18), YES);
+    PlaceLabel(view, OCText(@"Klip sematan dan klip di koleksi tetap disimpan.", @"Pinned clips and clips in collections are kept."), NSMakeRect(15,140,450,18), YES);
 
-    PlaceButton(view, OCText(@"Bersihkan riwayat…", @"Clear History…"), self, @selector(clearOrdinary:), NSMakeRect(13,79,178,31));
-    NSButton *clear = PlaceButton(view, OCText(@"Hapus semua klip…", @"Delete All Clips…"), self, @selector(clearAll:), NSMakeRect(244,79,162,31));
+    SettingsSectionLabel(view, OCText(@"Hapus data", @"Delete data"), 108);
+    SettingsGroup(view,8,92);
+    SettingsDivider(view,54);
+    PlaceLabel(view, OCText(@"Klip biasa", @"Regular clips"), NSMakeRect(15,66,215,20), NO);
+    PlaceButton(view, OCText(@"Bersihkan riwayat…", @"Clear History…"), self, @selector(clearOrdinary:), NSMakeRect(287,61,178,31));
+    PlaceLabel(view, OCText(@"Termasuk sematan dan isi koleksi", @"Includes pinned and collected clips"), NSMakeRect(15,20,263,20), NO);
+    NSButton *clear = PlaceButton(view, OCText(@"Hapus semua klip…", @"Delete All Clips…"), self, @selector(clearAll:), NSMakeRect(287,15,178,31));
     clear.contentTintColor = NSColor.systemRedColor;
-    NSTextField *ordinaryHelp = [NSTextField wrappingLabelWithString:
-        OCText(@"Hapus klip biasa. Klip sematan dan klip di koleksi tetap tersimpan.",
-               @"Delete regular clips. Keep pinned clips and clips in collections.")];
-    ordinaryHelp.font = [NSFont systemFontOfSize:12];
-    ordinaryHelp.textColor = NSColor.secondaryLabelColor;
-    ordinaryHelp.frame = NSMakeRect(15,43,215,36);
-    [view addSubview:ordinaryHelp];
-    NSTextField *allHelp = [NSTextField wrappingLabelWithString:
-        OCText(@"Hapus semua klip, termasuk klip sematan. Koleksi jadi kosong.",
-               @"Delete all clips, including pinned clips. Collections become empty.")];
-    allHelp.font = ordinaryHelp.font;
-    allHelp.textColor = NSColor.secondaryLabelColor;
-    allHelp.frame = NSMakeRect(246,43,219,36);
-    [view addSubview:allHelp];
 }
 
 - (void)buildPrivacy:(NSView *)view {
     SettingsTitle(view, OCText(@"Privasi", @"Privacy"));
-    SettingsGroup(view,193,94);
-    SettingsGroup(view,8,116);
+    SettingsSectionLabel(view, OCText(@"Izin sistem", @"System permissions"), 279);
+    SettingsGroup(view,169,102);
+    SettingsDivider(view,220);
+    SettingsSectionLabel(view, OCText(@"Aplikasi yang dikecualikan", @"Excluded apps"), 135);
+    SettingsGroup(view,8,119);
 
-    self.clipboardPermission = PlaceLabel(view, @"", NSMakeRect(15,248,225,20), NO);
-    self.caretPermission = PlaceLabel(view, @"", NSMakeRect(15,211,215,20), NO);
-    PlaceButton(view, OCText(@"Buka Privasi & Keamanan", @"Open Privacy & Security"), self, @selector(openPrivacy:), NSMakeRect(245,242,217,31));
+    self.clipboardPermission = PlaceLabel(view, @"", NSMakeRect(15,236,225,20), NO);
+    self.caretPermission = PlaceLabel(view, @"", NSMakeRect(15,184,240,20), NO);
+    self.privacySettingsButton = PlaceButton(view, OCText(@"Buka Privasi & Keamanan", @"Open Privacy & Security"), self, @selector(openPrivacy:), NSMakeRect(245,230,220,31));
     self.guideButton = PlaceButton(view, OCText(@"Aktifkan Accessibility…", @"Enable Accessibility…"), self,
-        @selector(requestCaret:), NSMakeRect(213,204,249,32));
+        @selector(requestCaret:), NSMakeRect(247,178,218,32));
     self.guideButton.toolTip = OCText(@"Buka panduan untuk posisi dekat kursor teks dan tempel langsung.", @"Open the guide to show the picker near the text cursor and paste directly.");
 
-    PlaceLabel(view, OCText(@"Aplikasi yang dikecualikan", @"Excluded apps"), NSMakeRect(15,96,250,19), NO);
-    PlaceButton(view, OCText(@"Tambah…", @"Add…"), self, @selector(addExclusion:), NSMakeRect(273,91,93,31));
-    self.removeExclusionButton = PlaceButton(view, OCText(@"Hapus", @"Remove"), self, @selector(removeExclusion:), NSMakeRect(369,91,94,31));
+    PlaceLabel(view, OCText(@"Pengecualian mengikuti perkiraan aplikasi sumber.", @"Exclusions use the estimated source app."), NSMakeRect(15,18,450,19), YES);
+    PlaceButton(view, OCText(@"Tambah…", @"Add…"), self, @selector(addExclusion:), NSMakeRect(273,128,93,31));
+    self.removeExclusionButton = PlaceButton(view, OCText(@"Hapus", @"Remove"), self, @selector(removeExclusion:), NSMakeRect(369,128,96,31));
     self.removeExclusionButton.enabled = NO;
 
-    [view addSubview:[[OCSettingsWell alloc] initWithFrame:NSMakeRect(15,40,447,48)]];
-    NSScrollView *scroll = [[NSScrollView alloc] initWithFrame:NSMakeRect(16,41,445,46)];
+    [view addSubview:[[OCSettingsWell alloc] initWithFrame:NSMakeRect(15,43,450,72)]];
+    NSScrollView *scroll = [[NSScrollView alloc] initWithFrame:NSMakeRect(16,44,448,70)];
     scroll.hasVerticalScroller = YES;
     scroll.autohidesScrollers = YES;
     scroll.borderType = NSNoBorder;
@@ -593,8 +764,7 @@ static void SettingsTitle(NSView *pane, NSString *title) {
     [view addSubview:scroll];
     self.excludedTable = table;
 
-    self.excludedEmpty = PlaceLabel(view, OCText(@"Belum ada pengecualian", @"No exclusions yet"), NSMakeRect(27,56,423,19), YES);
-    PlaceLabel(view, OCText(@"Pengecualian mengikuti perkiraan aplikasi sumber.", @"Exclusions use the estimated source app."), NSMakeRect(15,14,447,19), YES);
+    self.excludedEmpty = PlaceLabel(view, OCText(@"Belum ada pengecualian", @"No exclusions yet"), NSMakeRect(27,69,423,19), YES);
 }
 
 - (void)refreshRecording {
@@ -602,6 +772,8 @@ static void SettingsTitle(NSView *pane, NSString *title) {
     self.clipboardPermission.stringValue = [NSString stringWithFormat:OCText(@"Izin clipboard  ·  %@", @"Clipboard access  ·  %@"), self.recorder.policy ?: OCText(@"Ikuti sistem", @"System default")];
     self.clipboardPermission.toolTip = self.clipboardPermission.stringValue;
     BOOL blocked = [self.recorder.status isEqualToString:OCText(@"Akses clipboard dibatasi", @"Clipboard access restricted")];
+    BOOL clipboardAllowed = [self.recorder.policy isEqualToString:OCText(@"Diizinkan", @"Allowed")];
+    self.privacySettingsButton.hidden = clipboardAllowed && !blocked;
     self.retryButton.hidden = !blocked;
     self.picker.recordingStatus = self.recorder.status;
 }
@@ -695,7 +867,7 @@ static void SettingsTitle(NSView *pane, NSString *title) {
 
 - (void)buildHistoryRetention:(NSView *)view {
     [self.historyRetentionContainer removeFromSuperview];
-    self.historyRetentionContainer = [[NSView alloc] initWithFrame:NSMakeRect(292,152,171,34)];
+    self.historyRetentionContainer = [[NSView alloc] initWithFrame:NSMakeRect(295,165,170,34)];
     [view addSubview:self.historyRetentionContainer];
     self.historyRetention = OCGlassPopup(self.historyRetentionContainer.bounds, self.historyRetentionContainer);
     for (NSArray *choice in @[@[OCText(@"Tanpa batas", @"Forever"),@0],@[OCText(@"1 hari", @"1 day"),@1],@[OCText(@"7 hari", @"7 days"),@7],
@@ -713,6 +885,7 @@ static void SettingsTitle(NSView *pane, NSString *title) {
     SMAppServiceStatus status = SMAppService.mainAppService.status;
     self.loginButton.state = (status == SMAppServiceStatusEnabled || status == SMAppServiceStatusRequiresApproval)
         ? NSControlStateValueOn : NSControlStateValueOff;
+    self.loginSettingsButton.hidden = status != SMAppServiceStatusRequiresApproval;
     self.loginStatus.stringValue = status == SMAppServiceStatusEnabled ? OCText(@"Aktif", @"On")
         : status == SMAppServiceStatusRequiresApproval ? OCText(@"Perlu persetujuan sistem.", @"System approval required.") : OCText(@"Nonaktif", @"Off");
 }
@@ -722,8 +895,10 @@ static void SettingsTitle(NSView *pane, NSString *title) {
     BOOL succeed = sender.state == NSControlStateValueOn ? [SMAppService.mainAppService registerAndReturnError:&error]
                                                         : [SMAppService.mainAppService unregisterAndReturnError:&error];
     [self refreshLogin];
-    if (!succeed && SMAppService.mainAppService.status != SMAppServiceStatusRequiresApproval)
+    if (!succeed && SMAppService.mainAppService.status != SMAppServiceStatusRequiresApproval) {
         self.loginStatus.stringValue = OCText(@"Pengaturan login gagal diperbarui.", @"Could not update login settings.");
+        self.loginSettingsButton.hidden = NO;
+    }
 }
 
 - (void)openLoginSettings:(id)sender { [SMAppService openSystemSettingsLoginItems]; }
