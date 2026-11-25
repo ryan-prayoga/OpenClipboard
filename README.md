@@ -103,9 +103,16 @@ Untuk mengaktifkan **Periksa pembaruan** → **Pasang pembaruan** di rilis:
 3. Pertahankan pasangan kunci yang sama untuk rilis berikutnya. Workflow
    menandatangani DMG dan appcast setiap kali tag rilis dipublikasikan.
 
-Untuk menjaga identitas aplikasi di macOS antarversi, siapkan identitas
-**Developer ID Application** dan profil notarization di Keychain runner, lalu
-atur variables `OPENCLIPBOARD_SIGNING_IDENTITY` dan `OPENCLIPBOARD_NOTARY_PROFILE`.
-Sparkle tetap bisa memverifikasi pembaruan dengan EdDSA untuk build ad hoc,
-tetapi macOS dapat meminta izin Accessibility lagi. Build sebelum Sparkle
-perlu dipasang manual sekali untuk beralih ke pembaruan dari aplikasi.
+Rilis publik memerlukan sertifikat **Developer ID Application** dari Apple Developer
+Team yang sama untuk mempertahankan identitas aplikasi antarversi. Konfigurasikan
+Actions secrets `OPENCLIPBOARD_DEVELOPER_ID_P12` (berkas PKCS#12 berisi sertifikat
+dan kunci privat, dikodekan Base64) dan `OPENCLIPBOARD_DEVELOPER_ID_PASSWORD`
+(kata sandi ekspor). Atur Actions variable `OPENCLIPBOARD_DEVELOPER_TEAM_ID` ke
+Team ID Apple. Untuk notarization, siapkan profil `notarytool` di runner dan atur
+`OPENCLIPBOARD_NOTARY_PROFILE`. Pengguna yang beralih dari build ad hoc mungkin
+perlu memberi izin Accessibility sekali setelah memasang build Developer ID pertama.
+
+Untuk Mac pengembangan dengan identitas **OpenClipboard Local Code Signing** di
+Rantai Kunci, jalankan `./scripts/install-local.sh` dari checkout versi yang ingin
+dipasang. Skrip menggunakan sertifikat lokal yang sama untuk setiap pembaruan.
+Tombol **Periksa pembaruan** tetap menampilkan versi terbaru dan tautan rilis.

@@ -28,6 +28,8 @@ identity=${OPENCLIPBOARD_SIGNING_IDENTITY:--}
 sign() {
     if [ "$identity" = "-" ]; then
         codesign --force --sign - "$1"
+    elif [ "${OPENCLIPBOARD_LOCAL_SIGNING:-0}" = 1 ]; then
+        codesign --force --timestamp=none --sign "$identity" "$1"
     else
         codesign --force --timestamp --options runtime --sign "$identity" "$1"
     fi

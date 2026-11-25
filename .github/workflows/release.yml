@@ -45,6 +45,39 @@ jobs:
           printf 'notes=%s\n' "$notes" >> "$GITHUB_OUTPUT"
           printf 'asset=dist/OpenClipboard-%s-arm64.dmg\n' "$version" >> "$GITHUB_OUTPUT"
 
+      - name: Configure Developer ID signing
+        if: github.event_name == 'push'
+        env:
+          CERTIFICATE: ${{ secrets.OPENCLIPBOARD_DEVELOPER_ID_P12 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.OPENCLIPBOARD_DEVELOPER_ID_PASSWORD }}
+          TEAM_ID: ${{ vars.OPENCLIPBOARD_DEVELOPER_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          : "${CERTIFICATE:?Set the base64 Developer ID Application PKCS#12 secret}"
+          : "${CERTIFICATE_PASSWORD:?Set the PKCS#12 password secret}"
+          [[ "$TEAM_ID" =~ ^[A-Z0-9]{10}$ ]]
+          signing_dir=$(mktemp -d "$RUNNER_TEMP/openclipboard-signing.XXXXXXXX")
+          keychain="$signing_dir/release.keychain-db"
+          keychain_password=$(openssl rand -hex 32)
+          certificate=$(mktemp "$RUNNER_TEMP/openclipboard-certificate.XXXXXXXX")
+          trap 'unlink "$certificate"' EXIT
+          printf '%s' "$CERTIFICATE" | base64 --decode > "$certificate"
+          security create-keychain -p "$keychain_password" "$keychain"
+          printf 'OPENCLIPBOARD_RELEASE_KEYCHAIN=%s\n' "$keychain" >> "$GITHUB_ENV"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$certificate" -k "$keychain" -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain"
+          python3 - "$keychain" <<'PYTHON'
+          import shlex, subprocess, sys
+          existing = shlex.split(subprocess.check_output(
+              ["security", "list-keychains", "-d", "user"], text=True))
+          subprocess.run(["security", "list-keychains", "-d", "user", "-s", sys.argv[1], *existing], check=True)
+          PYTHON
+          identity=$(security find-identity -v -p codesigning "$keychain" |
+            awk -v team="($TEAM_ID)" '/"Developer ID Application:/ && index($0, team) { print $2; exit }')
+          test -n "$identity"
+          printf 'OPENCLIPBOARD_SIGNING_IDENTITY=%s\n' "$identity" >> "$GITHUB_ENV"
+
       - name: Prepare in-app updates
         if: github.event_name == 'push'
         env:
@@ -63,13 +96,21 @@ jobs:
 
       - name: Test, build, and package
         env:
-          OPENCLIPBOARD_SIGNING_IDENTITY: ${{ vars.OPENCLIPBOARD_SIGNING_IDENTITY }}
           OPENCLIPBOARD_NOTARY_PROFILE: ${{ vars.OPENCLIPBOARD_NOTARY_PROFILE }}
         run: |
           cargo fmt --check
           cargo test --locked
           ./scripts/build-app.sh
           ./scripts/package-dmg.sh
+
+      - name: Verify release signing identity
+        if: github.event_name == 'push'
+        env:
+          TEAM_ID: ${{ vars.OPENCLIPBOARD_DEVELOPER_TEAM_ID }}
+        run: |
+          codesign --verify --strict \
+            -R="anchor apple generic and certificate leaf[subject.OU] = \"$TEAM_ID\" and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and identifier \"dev.ryanprayoga.openclipboard\"" \
+            dist/OpenClipboard.app
 
       - name: Sign the update feed
         if: github.event_name == 'push' && vars.OPENCLIPBOARD_UPDATE_PUBLIC_KEY != ''
@@ -105,3 +146,10 @@ jobs:
             --verify-tag --draft --title "OpenClipboard $GITHUB_REF_NAME" \
             --notes-file "$NOTES"
           gh release edit "$GITHUB_REF_NAME" --draft=false --latest
+
+      - name: Remove temporary signing keychain
+        if: always()
+        run: |
+          if [[ -n "${OPENCLIPBOARD_RELEASE_KEYCHAIN:-}" ]]; then
+            security delete-keychain "$OPENCLIPBOARD_RELEASE_KEYCHAIN"
+          fi
