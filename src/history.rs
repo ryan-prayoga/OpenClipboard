@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::fs::{DirBuilder, File, OpenOptions};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::Path;
@@ -43,6 +42,7 @@ pub(crate) struct Collection {
 pub(crate) struct Catalog {
     pub clips: Vec<Summary>,
     pub collections: Vec<Collection>,
+    pub has_more: bool,
 }
 
 pub(crate) struct History {
@@ -156,6 +156,13 @@ impl History {
             drop((select, update));
             transaction.commit()?;
         }
+        // Keep catalog metadata on small index pages, away from image payloads.
+        disk.execute_batch(
+            "CREATE INDEX IF NOT EXISTS clips_catalog_order ON clips
+             (MAX(copied,COALESCE(pasted,copied)) DESC, id DESC,
+              kind, title, copied, pinned, width, height, color, pasted, character_count);
+             DROP INDEX IF EXISTS clips_catalog;",
+        )?;
         Ok(Self {
             disk,
             _owner: None,
@@ -212,45 +219,82 @@ impl History {
         Ok(())
     }
 
-    pub fn catalog(&self, query: &str, kind: &str, collection: i64) -> Result<Catalog> {
-        let mut select = self.disk.prepare(
+    #[cfg(test)]
+    fn catalog(&self, query: &str, kind: &str, collection: i64) -> Result<Catalog> {
+        self.catalog_page(query, kind, collection, None, i64::MAX - 1)
+    }
+
+    pub fn catalog_page(
+        &self,
+        query: &str,
+        kind: &str,
+        collection: i64,
+        after: Option<(i64, i64)>,
+        limit: i64,
+    ) -> Result<Catalog> {
+        let source = if query.is_empty() {
+            "clips c INDEXED BY clips_catalog_order"
+        } else {
+            "clips c"
+        };
+        let search_filter = if query.is_empty() {
+            ""
+        } else {
+            "AND instr(c.search,?1)>0"
+        };
+        let cursor_filter = if after.is_some() {
+            "AND (MAX(copied,COALESCE(pasted,copied)), id) < (?4, ?5)"
+        } else {
+            ""
+        };
+        let (last_used, last_id) = after.unwrap_or_default();
+        let mut select = self.disk.prepare_cached(&format!(
             "SELECT id,kind,title,copied,pinned,width,height,color,MAX(copied,COALESCE(pasted,copied)),character_count
-             FROM clips c
-             WHERE (?1='' OR instr(c.search,?1)>0) AND (?2='' OR c.kind=?2)
-               AND (?3=0 OR EXISTS(SELECT 1 FROM memberships m WHERE m.clip=c.id AND m.collection=?3))",
+             FROM {source}
+             WHERE (?2='' OR c.kind=?2)
+               AND (?3=0 OR EXISTS(SELECT 1 FROM memberships m WHERE m.clip=c.id AND m.collection=?3))
+               {search_filter} {cursor_filter}
+             ORDER BY MAX(copied,COALESCE(pasted,copied)) DESC, id DESC
+             LIMIT ?6"
+        ))?;
+        let clips = select.query_map(
+            params![
+                query.to_lowercase(),
+                kind,
+                collection,
+                last_used,
+                last_id,
+                limit + 1
+            ],
+            |row| {
+                Ok(Summary {
+                    id: row.get(0)?,
+                    kind: row.get(1)?,
+                    title: row.get(2)?,
+                    copied: row.get(3)?,
+                    last_used: row.get(8)?,
+                    pinned: row.get(4)?,
+                    character_count: row.get(9)?,
+                    width: row.get(5)?,
+                    height: row.get(6)?,
+                    color: row.get(7)?,
+                    collections: Vec::new(),
+                })
+            },
         )?;
-        let clips = select.query_map(params![query.to_lowercase(), kind, collection], |row| {
-            Ok(Summary {
-                id: row.get(0)?,
-                kind: row.get(1)?,
-                title: row.get(2)?,
-                copied: row.get(3)?,
-                last_used: row.get(8)?,
-                pinned: row.get(4)?,
-                character_count: row.get(9)?,
-                width: row.get(5)?,
-                height: row.get(6)?,
-                color: row.get(7)?,
-                collections: Vec::new(),
-            })
-        })?;
         let mut clips = clips.collect::<rusqlite::Result<Vec<_>>>()?;
-        let mut memberships: HashMap<i64, Vec<i64>> = HashMap::new();
-        let mut select = self
-            .disk
-            .prepare("SELECT clip,collection FROM memberships")?;
-        for membership in select.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))? {
-            let (clip, collection) = membership?;
-            memberships.entry(clip).or_default().push(collection);
+        let has_more = clips.len() as i64 > limit;
+        if has_more {
+            clips.pop();
         }
+        let mut memberships = self.disk.prepare_cached(
+            "SELECT collection FROM memberships WHERE clip=?1 ORDER BY collection",
+        )?;
         for clip in &mut clips {
-            clip.collections = memberships.remove(&clip.id).unwrap_or_default();
+            clip.collections = memberships
+                .query_map([clip.id], |row| row.get(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
         }
-        clips.sort_by(|a, b| {
-            b.last_used
-                .cmp(&a.last_used)
-                .then(b.id.unsigned_abs().cmp(&a.id.unsigned_abs()))
-        });
         let mut select = self
             .disk
             .prepare("SELECT id,name,color FROM collections ORDER BY id")?;
@@ -263,7 +307,11 @@ impl History {
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
-        Ok(Catalog { clips, collections })
+        Ok(Catalog {
+            clips,
+            collections,
+            has_more,
+        })
     }
 
     pub fn payload(&self, id: i64) -> Result<Vec<Part>> {
@@ -565,6 +613,49 @@ mod tests {
     }
 
     #[test]
+    fn catalog_pages_preserve_filtered_order_and_memberships() {
+        let mut history = history();
+        let collection = history.create_collection("Work").ok().unwrap();
+        for index in 0..205 {
+            let title = if index % 2 == 0 { "match" } else { "other" };
+            let id = add(&mut history, &format!("{title} {index}"));
+            if index % 2 == 0 {
+                history.membership(id, collection, true).ok().unwrap();
+            }
+        }
+        history
+            .disk
+            .execute("UPDATE clips SET copied=1, pasted=NULL", [])
+            .unwrap();
+
+        for (query, tab, expected) in [("", 0, 205), ("match", collection, 103)] {
+            let mut cursor = None;
+            let mut ids = Vec::new();
+            loop {
+                let page = history
+                    .catalog_page(query, "teks", tab, cursor, 100)
+                    .ok()
+                    .unwrap();
+                assert!(page.clips.len() <= 100);
+                for clip in &page.clips {
+                    if tab != 0 {
+                        assert_eq!(clip.collections, [collection]);
+                    }
+                    ids.push(clip.id);
+                }
+                if !page.has_more {
+                    break;
+                }
+                assert_eq!(page.clips.len(), 100);
+                let last = page.clips.last().unwrap();
+                cursor = Some((last.last_used, last.id));
+            }
+            assert_eq!(ids.len(), expected);
+            assert!(ids.windows(2).all(|pair| pair[0] > pair[1]));
+        }
+    }
+
+    #[test]
     fn undo_batch_restores_payload_pin_and_membership() {
         let mut history = history();
         let ordinary = add(&mut history, "Brief desain");
@@ -678,6 +769,10 @@ mod tests {
         before
             .disk
             .execute("UPDATE clips SET copied=id", [])
+            .unwrap();
+        before
+            .disk
+            .execute("DROP INDEX clips_catalog_order", [])
             .unwrap();
         before
             .disk

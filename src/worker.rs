@@ -47,6 +47,8 @@ enum Request {
         query: String,
         kind: String,
         collection: i64,
+        after: Option<(i64, i64)>,
+        limit: i64,
     },
     Payload {
         ticket: u64,
@@ -316,11 +318,18 @@ fn handle_request(history: &mut History, request: Request) -> Result<(), Error> 
             query,
             kind,
             collection,
+            after,
+            limit,
         } => {
-            match history
-                .expire()
-                .and_then(|_| history.catalog(&query, &kind, collection))
-            {
+            match history.expire().and_then(|_| {
+                history.catalog_page(
+                    &query,
+                    &kind,
+                    collection,
+                    after,
+                    limit.clamp(1, i64::MAX - 1),
+                )
+            }) {
                 Ok(catalog) => emit(json!({"kind":"catalog", "ticket":ticket, "catalog":catalog})),
                 Err(error) => emit(
                     json!({"kind":"catalog_failed", "ticket":ticket, "reason":error_reason(error)}),

@@ -240,6 +240,9 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
 }
 @end
 
+static const NSUInteger CatalogPageSize = 100;
+static const NSUInteger CatalogPrefetchRows = 12;
+
 @interface OCPicker () <NSSearchFieldDelegate, NSPopoverDelegate>
 @property(nonatomic, strong) NSPanel *panel;
 @property(nonatomic, strong) NSPanel *closingPanel;
@@ -274,6 +277,8 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
 @property(nonatomic) BOOL revealTab;
 @property(nonatomic) uint64_t catalogTicket;
 @property(nonatomic) BOOL catalogPending;
+@property(nonatomic) BOOL catalogAppending;
+@property(nonatomic) BOOL catalogHasMore;
 @property(nonatomic) BOOL catalogFailed;
 @property(nonatomic) NSTimeInterval searchStarted;
 @property(nonatomic) uint64_t payloadTicket;
@@ -317,6 +322,7 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
     self.payloadMode = OCIdle;
     self.searchStarted = 0;
     self.catalogPending = NO;
+    self.catalogHasMore = NO;
     self.catalogFailed = NO;
     [self.images removeAllObjects];
     [self.requested removeAllObjects];
@@ -661,7 +667,15 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
 }
 
 - (void)fetchCatalog {
+    [self requestCatalogAppending:NO limit:CatalogPageSize];
+}
+
+- (void)requestCatalogAppending:(BOOL)append limit:(NSUInteger)limit {
     if (!self.panel) return;
+    NSDictionary *last = append ? self.clips.lastObject : nil;
+    NSArray *cursor = last ? @[last[@"last_used"], last[@"id"]] : nil;
+    self.catalogAppending = append;
+    if (!append) self.catalogHasMore = NO;
     uint64_t ticket = ++self.catalogTicket;
     if (self.catalogFailed && !self.results.rows.count) {
         [self.results showEmptyTitle:nil detail:nil announce:NO];
@@ -670,7 +684,8 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
     self.catalogPending = YES;
     self.catalogFailed = NO;
     if (!OCSend(@{@"action":@"catalog", @"ticket":@(ticket),
-        @"query":self.search.stringValue ?: @"", @"kind":@"", @"collection":@(self.activeTab)})) {
+        @"query":self.search.stringValue ?: @"", @"kind":@"", @"collection":@(self.activeTab),
+        @"after":cursor ?: NSNull.null, @"limit":@(limit)})) {
         [self catalogDidFail];
         return;
     }
@@ -687,6 +702,10 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
 
 - (void)catalogDidFail {
     self.catalogPending = NO;
+    if (self.catalogAppending) {
+        [self setWarning:OCText(@"Klip berikutnya gagal dimuat.", @"Could not load more clips.")];
+        return;
+    }
     self.catalogFailed = YES;
     if (self.results.actionsSuspended) self.results.rows = @[];
     if (!self.results.rows.count) {
@@ -743,7 +762,8 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
     }
     if (!self.panel) return;
     if ([kind isEqualToString:@"changed"]) {
-        [self fetchCatalog];
+        NSUInteger limit = self.results.actionsSuspended ? CatalogPageSize : MAX(CatalogPageSize, self.clips.count);
+        [self requestCatalogAppending:NO limit:limit];
     } else if ([kind isEqualToString:@"created"]) {
         [self setMessage:OCText(@"Koleksi dibuat.", @"Collection created.")];
         if (event[@"id"]) [self selectTab:[event[@"id"] longLongValue]];
@@ -775,7 +795,9 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
             self.revealTab = NO;
             [self.tabs scrollSelectedToVisible];
         }
-        self.clips = catalog[@"clips"] ?: @[];
+        NSArray *page = catalog[@"clips"] ?: @[];
+        self.catalogHasMore = [catalog[@"has_more"] boolValue];
+        self.clips = self.catalogAppending ? [self.clips arrayByAddingObjectsFromArray:page] : page;
         OCResults *result = self.activeResults;
         BOOL query = self.activeSearch.stringValue.length > 0;
         NSString *title = query ? OCText(@"Tidak ada hasil", @"No results") : self.activeTab ? OCText(@"Koleksi masih kosong", @"This collection is empty") : OCText(@"Belum ada klip", @"No clips yet");
@@ -996,8 +1018,21 @@ typedef NS_ENUM(NSInteger, OCPayloadMode) { OCIdle, OCPaste, OCPreview };
     if (!OCSend(request)) [self setWarning:OCText(@"Riwayat sedang sibuk. Coba lagi.", @"History is busy. Try again.")];
 }
 
+- (void)loadNextCatalogPageIfNeeded {
+    OCResults *result = self.activeResults;
+    NSUInteger count = result.rows.count;
+    if (!self.catalogHasMore || self.catalogPending || result.actionsSuspended ||
+        !count || count != self.clips.count) return;
+    NSInteger threshold = (NSInteger)(count - MIN(count, CatalogPrefetchRows));
+    NSRect row = [result rowFrame:threshold];
+    NSRect visible = result.visibleRect;
+    BOOL nearEnd = self.bottom ? NSMaxX(visible) >= NSMinX(row) : NSMaxY(visible) >= NSMinY(row);
+    if (nearEnd) [self requestCatalogAppending:YES limit:CatalogPageSize];
+}
+
 - (void)loadVisibleImages {
     if (!self.panel) return;
+    [self loadNextCatalogPageIfNeeded];
     NSArray *visible = self.activeResults.visibleRows;
     if (self.images.count > 36) {
         NSMutableSet *keep = [NSMutableSet set];
