@@ -178,6 +178,7 @@ static NSColor *Swatch(NSString *hex) {
 @property(nonatomic, copy, readwrite) NSIndexSet *selectedIndexes;
 @property(nonatomic) NSInteger selectionAnchor;
 @property(nonatomic, copy) NSArray<OCRowAccessibility *> *accessibleRows;
+@property(nonatomic, strong) NSImageView *emptyIcon;
 @property(nonatomic, strong) NSTextField *emptyTitle;
 @property(nonatomic, strong) NSTextField *emptyDetail;
 @property(nonatomic, strong) NSNumber *lastClickID;
@@ -208,12 +209,19 @@ static NSColor *Swatch(NSString *hex) {
         _selected = -1;
         _selectionAnchor = -1;
         _selectedIndexes = [NSIndexSet indexSet];
-        _emptyTitle = OCLabel(@"",14,NSFontWeightMedium);
+        _emptyIcon = [[NSImageView alloc] initWithFrame:NSZeroRect];
+        _emptyIcon.imageScaling = NSImageScaleProportionallyUpOrDown;
+        _emptyIcon.hidden = YES;
+        [_emptyIcon setAccessibilityElement:NO];
+        [self addSubview:_emptyIcon];
+        _emptyTitle = OCLabel(@"",15,NSFontWeightSemibold);
+        _emptyTitle.alignment = NSTextAlignmentCenter;
         _emptyTitle.hidden = YES;
         [self addSubview:_emptyTitle];
         _emptyDetail = [NSTextField wrappingLabelWithString:@""];
         _emptyDetail.font = [NSFont systemFontOfSize:12];
         _emptyDetail.textColor = Secondary();
+        _emptyDetail.alignment = NSTextAlignmentCenter;
         _emptyDetail.hidden = YES;
         [self addSubview:_emptyDetail];
         [self setAccessibilityElement:YES];
@@ -265,11 +273,22 @@ static NSColor *Swatch(NSString *hex) {
     CGFloat height = self.rows.count ? NSMaxY([self rowFrame:(NSInteger)self.rows.count - 1]) + 8 : 60;
     CGFloat width = self.horizontal ? 4 + self.rows.count * CardStep : viewport.width;
     [self setFrameSize:NSMakeSize(MAX(viewport.width,width), MAX(viewport.height,height))];
-    CGFloat textWidth = MAX(0,viewport.width - 32);
-    self.emptyTitle.frame = NSMakeRect(16,7,textWidth,20);
-    self.emptyDetail.frame = NSMakeRect(16,28,textWidth,MAX(0,viewport.height - 30));
-    self.emptyTitle.hidden = self.rows.count || !self.emptyTitle.stringValue.length;
-    self.emptyDetail.hidden = self.rows.count || !self.emptyDetail.stringValue.length;
+    BOOL showEmpty = !self.rows.count && self.emptyTitle.stringValue.length;
+    CGFloat textWidth = MIN(320, MAX(0, viewport.width - 32));
+    CGFloat textX = round((viewport.width - textWidth) / 2);
+    CGFloat detailHeight = showEmpty && textWidth && self.emptyDetail.stringValue.length
+        ? ceil([self.emptyDetail.cell cellSizeForBounds:NSMakeRect(0,0,textWidth,CGFLOAT_MAX)].height) : 0;
+    detailHeight = MIN(detailHeight, MAX(0, viewport.height - 32));
+    CGFloat textHeight = 20 + (detailHeight > 0 ? 6 + detailHeight : 0);
+    BOOL showIcon = showEmpty && self.emptyIcon.image && viewport.height >= textHeight + 56;
+    CGFloat y = MAX(0, round((viewport.height - textHeight - (showIcon ? 40 : 0)) / 2));
+    self.emptyIcon.frame = NSMakeRect(round((viewport.width - 28) / 2),y,28,28);
+    self.emptyIcon.hidden = !showIcon;
+    if (showIcon) y += 40;
+    self.emptyTitle.frame = NSMakeRect(textX,y,textWidth,20);
+    self.emptyDetail.frame = NSMakeRect(textX,y+26,textWidth,detailHeight);
+    self.emptyTitle.hidden = !showEmpty;
+    self.emptyDetail.hidden = !showEmpty || detailHeight == 0;
     self.needsDisplay = YES;
 }
 
@@ -296,9 +315,10 @@ static NSColor *Swatch(NSString *hex) {
     [self setNeedsDisplayInRect:row];
 }
 
-- (void)showEmptyTitle:(NSString *)title detail:(NSString *)detail announce:(BOOL)announce {
+- (void)showEmptyTitle:(NSString *)title detail:(NSString *)detail symbol:(NSString *)symbol announce:(BOOL)announce {
     NSString *message = title ?: @"";
     BOOL changed = self.emptyTitle.hidden || ![message isEqualToString:self.emptyTitle.stringValue];
+    self.emptyIcon.image = symbol ? Symbol(symbol) : nil;
     self.emptyTitle.stringValue = message;
     self.emptyDetail.stringValue = detail ?: @"";
     if (announce && changed && !self.rows.count && message.length) {

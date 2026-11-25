@@ -678,7 +678,7 @@ static const NSUInteger CatalogPrefetchRows = 12;
     if (!append) self.catalogHasMore = NO;
     uint64_t ticket = ++self.catalogTicket;
     if (self.catalogFailed && !self.results.rows.count) {
-        [self.results showEmptyTitle:nil detail:nil announce:NO];
+        [self.results showEmptyTitle:nil detail:nil symbol:nil announce:NO];
         [self.results layoutRows];
     }
     self.catalogPending = YES;
@@ -694,7 +694,7 @@ static const NSUInteger CatalogPrefetchRows = 12;
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 120 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
             OCPicker *picker = weakSelf;
             if (picker.catalogTicket != ticket || !picker.catalogPending || picker.results.rows.count) return;
-            [picker.results showEmptyTitle:OCText(@"Memuat klip…", @"Loading clips…") detail:nil announce:NO];
+            [picker.results showEmptyTitle:OCText(@"Memuat klip…", @"Loading clips…") detail:nil symbol:nil announce:NO];
             [picker.results layoutRows];
         });
     }
@@ -709,7 +709,7 @@ static const NSUInteger CatalogPrefetchRows = 12;
     self.catalogFailed = YES;
     if (self.results.actionsSuspended) self.results.rows = @[];
     if (!self.results.rows.count) {
-        [self.results showEmptyTitle:OCText(@"Riwayat gagal dimuat", @"Could not load history") detail:OCText(@"Tekan Enter untuk mencoba lagi.", @"Press Enter to retry.") announce:YES];
+        [self.results showEmptyTitle:OCText(@"Riwayat gagal dimuat", @"Could not load history") detail:OCText(@"Tekan Enter untuk mencoba lagi.", @"Press Enter to retry.") symbol:@"exclamationmark.triangle" announce:YES];
         [self.results layoutRows];
     } else {
         [self setWarning:OCText(@"Riwayat gagal diperbarui.", @"Could not refresh history.")];
@@ -720,7 +720,7 @@ static const NSUInteger CatalogPrefetchRows = 12;
     [self clearPendingDrag];
     self.results.actionsSuspended = YES;
     self.results.selected = -1;
-    [self.results showEmptyTitle:nil detail:nil announce:NO];
+    [self.results showEmptyTitle:nil detail:nil symbol:nil announce:NO];
     [self.results layoutRows];
 }
 
@@ -802,12 +802,18 @@ static const NSUInteger CatalogPrefetchRows = 12;
         BOOL query = self.activeSearch.stringValue.length > 0;
         NSString *title = query ? OCText(@"Tidak ada hasil", @"No results") : self.activeTab ? OCText(@"Koleksi masih kosong", @"This collection is empty") : OCText(@"Belum ada klip", @"No clips yet");
         NSString *detail = nil;
-        if (!query && !self.activeTab) {
+        NSString *symbol = query ? @"magnifyingglass" : self.activeTab ? @"folder" : @"doc.on.clipboard";
+        if (query) {
+            detail = OCText(@"Coba kata kunci lain.", @"Try a different search term.");
+        } else if (self.activeTab) {
+            detail = OCText(@"Klik kanan klip di Riwayat, lalu pilih Tambahkan ke koleksi.",
+                            @"Right-click a clip in History, then choose Add to Collection.");
+        } else {
             detail = self.shortcutLabel.length
                 ? [NSString stringWithFormat:OCText(@"Salin teks atau gambar, lalu tekan %@.", @"Copy text or an image, then press %@."),self.shortcutLabel]
                 : OCText(@"Salin teks atau gambar untuk mulai mengisi riwayat.", @"Copy text or an image to start building your history.");
         }
-        [self renderRows:self.clips in:result emptyTitle:title detail:detail announce:query];
+        [self renderRows:self.clips in:result emptyTitle:title detail:detail symbol:symbol announce:query];
         [self loadVisibleImages];
         ReportMetric("search", self.bottom, self.searchStarted);
         self.searchStarted = 0;
@@ -815,12 +821,12 @@ static const NSUInteger CatalogPrefetchRows = 12;
 }
 
 - (void)renderRows:(NSArray<NSDictionary *> *)rows in:(OCResults *)result
-        emptyTitle:(NSString *)title detail:(NSString *)detail announce:(BOOL)announce {
+        emptyTitle:(NSString *)title detail:(NSString *)detail symbol:(NSString *)symbol announce:(BOOL)announce {
     NSNumber *previous = [self selectedIn:result][@"id"];
     BOOL selectedWasVisible = previous && NSIntersectsRect([result rowFrame:result.selected],result.visibleRect);
     [result replaceRowsPreservingSelection:rows];
     NSInteger index = result.selected;
-    [result showEmptyTitle:title detail:detail announce:announce];
+    [result showEmptyTitle:title detail:detail symbol:symbol announce:announce];
     [result layoutRows];
     if (index >= 0 && (selectedWasVisible || ![previous isEqual:rows[(NSUInteger)index][@"id"]]))
         [result scrollRowToVisible:index];

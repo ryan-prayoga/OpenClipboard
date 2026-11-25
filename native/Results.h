@@ -17,7 +17,7 @@ typedef NS_ENUM(NSUInteger, OCResultAction) {
 @property(nonatomic, strong) NSMutableDictionary<NSNumber *, NSImage *> *images;
 @property(nonatomic) NSInteger selected;
 @property(nonatomic, copy, readonly) NSIndexSet *selectedIndexes;
-- (void)showEmptyTitle:(NSString *)title detail:(NSString *)detail announce:(BOOL)announce;
+- (void)showEmptyTitle:(NSString *)title detail:(NSString *)detail symbol:(NSString *)symbol announce:(BOOL)announce;
 @property(nonatomic, copy) void (^picked)(NSInteger index, OCResultAction action);
 @property(nonatomic, copy) NSMenu *(^contextMenu)(NSInteger index);
 @property(nonatomic, copy) void (^prepareDrag)(NSArray<NSDictionary *> *rows);
