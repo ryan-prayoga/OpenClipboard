@@ -57,20 +57,51 @@ static NSString *const ReleasesURL = @"https://github.com/ryan-prayoga/OpenClipb
 // Only release bundles include Sparkle. Keep ordinary Cargo builds independent of it.
 @protocol OCReleaseUpdater <NSObject>
 @property(nonatomic, readonly) BOOL canCheckForUpdates;
+- (instancetype)initWithHostBundle:(NSBundle *)host applicationBundle:(NSBundle *)application
+                        userDriver:(id)driver delegate:(id)delegate;
 - (BOOL)startUpdater:(NSError **)error;
 - (void)checkForUpdates;
 @end
 
-@protocol OCReleaseUpdaterController <NSObject>
-@property(nonatomic, readonly) id<OCReleaseUpdater> updater;
-- (instancetype)initWithStartingUpdater:(BOOL)startUpdater updaterDelegate:(id)updaterDelegate userDriverDelegate:(id)userDriverDelegate;
+@protocol OCReleaseUserDriver <NSObject>
+- (instancetype)initWithHostBundle:(NSBundle *)host delegate:(id)delegate;
+- (void)showUpdaterError:(NSError *)error acknowledgement:(void (^)(void))acknowledgement;
+@end
+
+@interface OCUpdateUserDriver : NSObject
+@property(nonatomic, strong) id<OCReleaseUserDriver> standardDriver;
+@property(nonatomic, copy) void (^showConnectionError)(void);
+@end
+
+@implementation OCUpdateUserDriver
+- (BOOL)respondsToSelector:(SEL)selector {
+    return [super respondsToSelector:selector] || [self.standardDriver respondsToSelector:selector];
+}
+
+- (id)forwardingTargetForSelector:(SEL)selector {
+    return [self.standardDriver respondsToSelector:selector]
+        ? self.standardDriver : [super forwardingTargetForSelector:selector];
+}
+
+- (void)showUpdaterError:(NSError *)error acknowledgement:(void (^)(void))acknowledgement {
+    for (NSError *cause = error; cause; cause = cause.userInfo[NSUnderlyingErrorKey]) {
+        if ([cause.domain isEqualToString:NSURLErrorDomain] && self.showConnectionError) {
+            // Let Sparkle finish its session and close its progress UI before offering a retry.
+            acknowledgement();
+            dispatch_async(dispatch_get_main_queue(), self.showConnectionError);
+            return;
+        }
+    }
+    [self.standardDriver showUpdaterError:error acknowledgement:acknowledgement];
+}
 @end
 
 @interface OCApplication : NSObject <NSApplicationDelegate, NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate>
 @property(nonatomic, strong) NSWindow *settings;
 @property(nonatomic, strong) NSButton *checkUpdateButton;
 @property(nonatomic) BOOL checkingRelease;
-@property(nonatomic, strong) id<OCReleaseUpdaterController> releaseUpdater;
+@property(nonatomic, strong) id<OCReleaseUpdater> releaseUpdater;
+@property(nonatomic, strong) OCUpdateUserDriver *releaseUserDriver;
 @property(nonatomic) CGFloat settingsTargetHeight;
 @property(nonatomic, strong) NSTabView *settingsPages;
 @property(nonatomic, copy) NSArray<NSButton *> *settingsNavigation;
@@ -557,7 +588,7 @@ static void SettingsTitle(NSView *pane, NSString *title) {
         @selector(checkForUpdates:), NSMakeRect(267,71,198,32));
     self.checkUpdateButton.enabled = !self.checkingRelease;
     if (self.releaseUpdater) {
-        [self.checkUpdateButton bind:NSEnabledBinding toObject:self.releaseUpdater.updater
+        [self.checkUpdateButton bind:NSEnabledBinding toObject:self.releaseUpdater
                         withKeyPath:@"canCheckForUpdates" options:nil];
     }
 }
@@ -573,24 +604,52 @@ static void SettingsTitle(NSView *pane, NSString *title) {
         return NO;
     }
 
-    Class controllerClass = [framework classNamed:@"SPUStandardUpdaterController"];
-    id<OCReleaseUpdaterController> controller = [[controllerClass alloc] initWithStartingUpdater:NO
-                                                                                 updaterDelegate:nil
-                                                                              userDriverDelegate:nil];
-    if (![controller.updater startUpdater:&error]) {
+    Class driverClass = [framework classNamed:@"SPUStandardUserDriver"];
+    Class updaterClass = [framework classNamed:@"SPUUpdater"];
+    OCUpdateUserDriver *driver = [OCUpdateUserDriver new];
+    driver.standardDriver = [[driverClass alloc] initWithHostBundle:host delegate:nil];
+    if (!driver.standardDriver || !updaterClass) return NO;
+    __weak OCApplication *weakSelf = self;
+    driver.showConnectionError = ^{ [weakSelf showUpdateConnectionError]; };
+    id<OCReleaseUpdater> updater = [[updaterClass alloc] initWithHostBundle:host applicationBundle:host
+                                                               userDriver:driver delegate:nil];
+    if (![updater startUpdater:&error]) {
         NSLog(@"Could not start Sparkle: %@", error);
         return NO;
     }
-    self.releaseUpdater = controller;
-    [self.checkUpdateButton bind:NSEnabledBinding toObject:controller.updater
-                    withKeyPath:@"canCheckForUpdates" options:nil];
+    self.releaseUserDriver = driver;
+    self.releaseUpdater = updater;
+    [self.checkUpdateButton bind:NSEnabledBinding toObject:updater withKeyPath:@"canCheckForUpdates" options:nil];
     return YES;
+}
+
+- (void)showUpdateConnectionError {
+    NSAlert *alert = [NSAlert new];
+    alert.alertStyle = NSAlertStyleWarning;
+    alert.messageText = OCText(@"Gagal memeriksa pembaruan", @"Could not check for updates");
+    alert.informativeText = OCText(@"OpenClipboard tidak dapat mengambil informasi pembaruan dari GitHub. Coba lagi sebentar lagi.",
+                                   @"OpenClipboard couldn’t retrieve update information from GitHub. Try again in a moment.");
+    [alert addButtonWithTitle:OCText(@"Coba lagi", @"Try Again")];
+    [alert addButtonWithTitle:OCText(@"Lihat rilis", @"View Releases")];
+    [alert addButtonWithTitle:OCText(@"Tutup", @"Close")].keyEquivalent = @"\e";
+    void (^completion)(NSModalResponse) = ^(NSModalResponse response) {
+        if (response == NSAlertFirstButtonReturn) {
+            dispatch_async(dispatch_get_main_queue(), ^{ [self checkForUpdates:nil]; });
+        } else if (response == NSAlertSecondButtonReturn) {
+            [NSWorkspace.sharedWorkspace openURL:[NSURL URLWithString:ReleasesURL]];
+        }
+    };
+    if (self.settings.isVisible && !self.settings.attachedSheet) {
+        [alert beginSheetModalForWindow:self.settings completionHandler:completion];
+    } else {
+        completion([alert runModal]);
+    }
 }
 
 - (void)checkForUpdates:(id)sender {
     if (self.checkingRelease || self.settings.attachedSheet) return;
     if ([NSBundle.mainBundle objectForInfoDictionaryKey:@"SUFeedURL"] && [self startReleaseUpdater]) {
-        id<OCReleaseUpdater> updater = self.releaseUpdater.updater;
+        id<OCReleaseUpdater> updater = self.releaseUpdater;
         if (updater.canCheckForUpdates) [updater checkForUpdates];
         return;
     }
